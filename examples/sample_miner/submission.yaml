@@ -1,0 +1,10 @@
+agent:
+  name: sample-miner
+  version: 1.0.0
+family_id: general_chat
+inference:
+  model: gpt-4.1-mini
+  providers:
+    - openai
+  fallback_order:
+    - openai

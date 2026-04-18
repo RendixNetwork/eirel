@@ -1,0 +1,12 @@
+FROM python:3.12-slim
+
+WORKDIR /runtime
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+COPY pyproject.toml README.md /runtime/
+COPY eirel /runtime/eirel
+
+RUN pip install --no-cache-dir .
+
+CMD ["sh", "-lc", "set -e; export PYTHONPATH=\"/submission${PYTHONPATH:+:$PYTHONPATH}\"; if [ -f /submission/requirements.txt ]; then python -m pip install --no-cache-dir -r /submission/requirements.txt; fi; if [ \"$MINER_PACKAGE_MODE\" = \"package\" ] && { [ -f /submission/pyproject.toml ] || [ -f /submission/setup.py ]; }; then if [ -n \"$MINER_DEPENDENCY_GROUP\" ]; then python -m pip install --no-cache-dir \"/submission[$MINER_DEPENDENCY_GROUP]\"; else python -m pip install --no-cache-dir /submission; fi; fi; python -m uvicorn \"$MINER_ENTRY_MODULE:$MINER_APP_OBJECT\" --host 0.0.0.0 --port \"$MINER_RUNTIME_PORT\""]

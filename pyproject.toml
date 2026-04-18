@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=69.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eirel"
+version = "0.2.0"
+description = "Public miner SDK, agent runner, and registration tooling for the EIREL subnet."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+authors = [
+    { name = "Rendix Network", email = "hello@eirel.ai" },
+]
+keywords = ["bittensor", "ai-agents", "decentralized-ai", "multimodal", "subnet"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Framework :: FastAPI",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "fastapi~=0.110.1",
+    "httpx>=0.28.1,<1",
+    "pydantic>=2.12.5,<3",
+    "pyyaml>=6.0.1,<7",
+    "uvicorn>=0.41.0,<0.42",
+]
+
+[project.urls]
+Homepage = "https://eirel.ai"
+Documentation = "https://docs.eirel.ai"
+Repository = "https://github.com/RendixNetwork/eirel"
+"Bug Tracker" = "https://github.com/RendixNetwork/eirel/issues"
+
+[project.optional-dependencies]
+submit = [
+    "bittensor==9.12.2",
+]
+dev = [
+    "pytest>=9.0.2,<10",
+    "pytest-asyncio>=1.3.0,<2",
+]
+
+[project.scripts]
+eirel = "eirel.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["eirel*"]
+
+[tool.setuptools.package-data]
+eirel = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+asyncio_mode = "auto"
