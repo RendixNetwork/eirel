@@ -38,6 +38,7 @@ Repository = "https://github.com/RendixNetwork/eirel"
 
 [project.optional-dependencies]
 submit = [
+    "async-substrate-interface==1.6.4",
     "bittensor==9.12.2",
 ]
 dev = [

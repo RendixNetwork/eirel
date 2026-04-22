@@ -1,0 +1,52 @@
+# Secrets / env overlays — NEVER bake into images
+.env
+.env.*
+*.env
+!.env.example
+!.env.*.example
+
+# Git & local state
+.git
+.gitignore
+.gitattributes
+
+# Python build noise
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/.tox
+**/.coverage
+**/htmlcov
+**/.venv
+**/venv
+*.egg-info
+build/
+dist/
+
+# Editor / OS
+.vscode
+.idea
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Docker metadata (not needed inside the image)
+.dockerignore
+Dockerfile*
+
+# Not needed at runtime
+tests/
+.github/
+examples/
+CHANGELOG.md
+
+# Local databases / logs / artifacts
+*.db
+*.sqlite
+*.sqlite3
+*.log
+logs/
