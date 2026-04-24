@@ -1,0 +1,83 @@
+name: Publish Docker image
+
+# Triggered by the same "release: published" event as PyPI publishing, so a
+# single GitHub Release cuts both artifacts in lockstep. workflow_dispatch
+# is kept for manual republishes (e.g. after rotating registry credentials
+# or re-cutting a broken version).
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Git tag to build (e.g. v0.2.1). Leave empty to use default branch HEAD."
+        required: false
+        default: ""
+
+env:
+  # The image name that existing Kubernetes manifests pin at. Keep stable —
+  # changing this silently breaks every deployed miner runtime.
+  IMAGE_NAME: rendixnetwork/eirel-miner-runtime
+  # Dockerfile path, relative to repo root.
+  DOCKERFILE: Dockerfile.runtime
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Resolve ref to build
+        id: ref
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            echo "ref=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ inputs.tag }}" ]; then
+            echo "ref=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=${{ github.ref }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout repo at release ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.ref.outputs.ref }}
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Emits a single 'latest' tag. If reproducible deploys ever need an
+      # immutable pin, add 'type=semver,pattern={{version}}' back here.
+      # Deployments that still pin ':v1' won't receive this image — update
+      # EIREL_OWNER_RUNTIME_IMAGE to ':latest' or re-add a rolling tag.
+      - name: Generate image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ${{ env.DOCKERFILE }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Pin amd64 for now. Miner nodes today are amd64. Adding arm64
+          # requires a QEMU buildx emulation step and roughly triples wall
+          # clock; revisit when there's a real arm64 deploy target.
+          platforms: linux/amd64
+          # Speed up rebuilds by caching layers between workflow runs.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
