@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 class Citation(BaseModel):
     url: str = Field(..., min_length=1)
+    title: str | None = None
     snippet: str | None = None
     tool_name: str = Field(..., min_length=1)
 

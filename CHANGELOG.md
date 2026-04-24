@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-04-24
+
+### Added
+
+- **`Citation.title`** — optional `title: str | None` field on the
+  `Citation` model in `eirel.families.general_chat`. It flows through
+  `TraceRecorder.record_citation` → `GeneralChatResponse.citations[*]`
+  so validators and dashboards can show the source page title next to
+  each URL. Backwards-compatible: defaults to `None`, existing
+  `Citation(url=..., snippet=..., tool_name=...)` calls keep working.
+
+### Changed
+
+- **`general_chat_agent` example forwards web_search titles** —
+  `_run_turn` already extracted `title` from each tool result for the
+  system-prompt snippet but dropped it when constructing the
+  `Citation`, so downstream consumers only saw URLs. Now passes
+  `title=title or None` into the `Citation(...)` call.
+
 ## [0.2.0] - 2026-04-18
 
 ### Fixed
@@ -57,6 +76,7 @@ Initial public release of the EIREL miner SDK.
 - Single `eirel` CLI with subcommands: `submit`, `status`, `package`, `compliance`, `register`, `serve`, `sample`.
 - `py.typed` marker — SDK ships typed per PEP 561.
 
-[Unreleased]: https://github.com/RendixNetwork/eirel/compare/v0.2.0...HEAD
-[0.2.0]: https://github.com/RendixNetwork/eirel/releases/tag/v0.2.0
+[Unreleased]: https://github.com/RendixNetwork/eirel/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/RendixNetwork/eirel/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/RendixNetwork/eirel/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/RendixNetwork/eirel/releases/tag/v0.1.0

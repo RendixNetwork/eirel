@@ -200,7 +200,12 @@ async def _run_turn(
                 snippet = str(item.get("snippet") or item.get("content") or "").strip()
                 if url:
                     trace.record_citation(
-                        Citation(url=url, snippet=snippet or None, tool_name="web_search")
+                        Citation(
+                            url=url,
+                            title=title or None,
+                            snippet=snippet or None,
+                            tool_name="web_search",
+                        )
                     )
                 snippets.append(
                     f"[{idx}] {title} ({url})\n{snippet}" if url or title else snippet
