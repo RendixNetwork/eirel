@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 
 from eirel.schemas import (
     AgentCapabilityMetadata,
@@ -8,6 +9,7 @@ from eirel.schemas import (
     AgentInvocationRequest,
     AgentInvocationResponse,
     AgentRegistrationMetadata,
+    StreamChunk,
 )
 
 
@@ -21,6 +23,44 @@ class BaseAgent(ABC):
     @abstractmethod
     async def infer(self, request: AgentInvocationRequest) -> AgentInvocationResponse:
         raise NotImplementedError
+
+    async def infer_stream(
+        self, request: AgentInvocationRequest,
+    ) -> AsyncIterator[StreamChunk]:
+        """Stream the agent's response as NDJSON chunks.
+
+        Default implementation: call non-streaming `infer()` and emit a
+        single `delta` carrying the whole answer text, followed by a `done`
+        chunk. Existing agents that only override `infer()` keep working —
+        the validator will still see them as "streaming-capable" but their
+        first-token latency will equal their full completion latency.
+
+        Real streaming agents should override this method to yield `delta`
+        chunks as soon as the underlying LLM emits tokens. That's the only
+        way to satisfy the 10s TTFB SLA.
+        """
+        response = await self.infer(request)
+        # Best-effort extraction of the answer text from the non-streaming
+        # output. Different families nest the answer under different keys;
+        # try the common ones in priority order.
+        out = response.output or {}
+        text = ""
+        for key in ("answer", "response", "text", "content", "message"):
+            value = out.get(key)
+            if isinstance(value, str) and value:
+                text = value
+                break
+        if text:
+            yield StreamChunk(event="delta", text=text)
+        yield StreamChunk(
+            event="done",
+            output=out,
+            citations=list(response.citations or []),
+            tool_calls=list(response.tool_calls or []),
+            status=response.status,
+            error=response.error,
+            metadata=dict(response.metadata or {}),
+        )
 
     async def health(self) -> AgentHealthStatus:
         return AgentHealthStatus(

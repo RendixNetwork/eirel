@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-04-25
+
+### Added
+
+- **`POST /v1/agent/infer/stream`** — new streaming invocation endpoint
+  on the agent server. Returns NDJSON (`application/x-ndjson`); each line
+  parses to a `StreamChunk` with `event` ∈ `delta` | `tool_call` |
+  `citation` | `done`. The stream MUST end with a `done` chunk; whatever
+  the receiver accumulates from `delta.text` chunks is the final answer.
+- **`StreamChunk`** schema (in `eirel.schemas`).
+- **`BaseAgent.infer_stream(request)`** async generator. Default
+  implementation calls non-streaming `infer()` and yields the whole
+  answer as a single `delta` followed by `done`, so existing agents
+  that only override `infer()` keep working without code changes —
+  but their first-token latency will equal their full completion
+  latency. Real streaming agents should override `infer_stream` and
+  yield `delta` chunks as soon as the underlying LLM emits tokens;
+  that's the only way to satisfy the validator's 10s TTFB SLA gate.
+
+### Why
+
+The consumer chat UI streams tokens to end users, so miners need a
+streaming endpoint. The validator exercises the same path 
+so a streaming-only regression is caught before it reaches users.
+
 ## [0.2.1] - 2026-04-24
 
 ### Added

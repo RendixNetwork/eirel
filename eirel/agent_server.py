@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 from typing import Any
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 
 from eirel.base_agent import BaseAgent
 from eirel.request_auth import verify_request_dependency
-from eirel.schemas import AgentInvocationRequest
+from eirel.schemas import AgentInvocationRequest, StreamChunk
 
 _logger = logging.getLogger(__name__)
 
@@ -36,6 +38,38 @@ def build_agent_app(agent: BaseAgent) -> FastAPI:
             _logger.warning("agent infer validation failed: %s", exc.error_count())
             raise HTTPException(status_code=400, detail=str(exc)) from None
         return (await agent.infer(request)).model_dump()
+
+    @app.post("/v1/agent/infer/stream")
+    async def infer_stream(
+        payload: dict[str, Any] = Depends(verify_request_dependency),
+    ):
+        try:
+            request = AgentInvocationRequest.model_validate(payload)
+        except ValidationError as exc:
+            _logger.warning("agent infer/stream validation failed: %s", exc.error_count())
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+
+        async def _ndjson():
+            try:
+                async for chunk in agent.infer_stream(request):
+                    if not isinstance(chunk, StreamChunk):
+                        # Allow agents to yield plain dicts; coerce here.
+                        chunk = StreamChunk.model_validate(chunk)
+                    yield (
+                        chunk.model_dump_json(exclude_none=True) + "\n"
+                    ).encode("utf-8")
+            except Exception as exc:  # noqa: BLE001 — stream errors must surface as a chunk
+                _logger.exception("infer_stream raised: %s", exc)
+                err = StreamChunk(
+                    event="done", status="failed", error=str(exc),
+                )
+                yield (err.model_dump_json(exclude_none=True) + "\n").encode("utf-8")
+
+        return StreamingResponse(
+            _ndjson(),
+            media_type="application/x-ndjson",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
 
     return app
 

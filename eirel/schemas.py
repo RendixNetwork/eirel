@@ -122,6 +122,41 @@ class ArtifactReference(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class StreamChunk(BaseModel):
+    """One unit of a streaming /v1/agent/infer/stream response.
+
+    The stream is NDJSON: one JSON object per line, each parsing into a
+    StreamChunk. Order is significant. The stream MUST end with a `done`
+    chunk; any text accumulated by the receiver up to that point is the
+    final answer. No `done` chunk = treat the stream as failed.
+
+    Event types:
+      - `delta`     : `text` carries the next slice of the answer body.
+                      Receivers concatenate `text` across all `delta`
+                      chunks in order to reconstruct the full response.
+      - `tool_call` : `tool_call` carries one tool invocation record.
+                      Surfaced for trace/citation extraction.
+      - `citation`  : `citation` carries one URL/title pair the agent
+                      wants to attribute. Equivalent to the citations
+                      list on the non-streaming response.
+      - `done`      : terminal chunk. `output`, `citations`, `tool_calls`,
+                      and `metadata` mirror the non-streaming
+                      AgentInvocationResponse so callers that only need
+                      the final state can ignore the deltas.
+    """
+
+    event: Literal["delta", "tool_call", "citation", "done"]
+    text: str | None = None
+    tool_call: dict[str, Any] | None = None
+    citation: dict[str, Any] | None = None
+    output: dict[str, Any] | None = None
+    citations: list[str] | None = None
+    tool_calls: list[dict[str, Any]] | None = None
+    status: Literal["completed", "failed", "deferred"] | None = None
+    error: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class AgentInvocationResponse(BaseModel):
     task_id: str
     family_id: FamilyId
