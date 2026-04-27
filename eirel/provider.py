@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from collections.abc import AsyncIterator
 from typing import Any, Literal
 
 import httpx
@@ -178,6 +179,105 @@ class AgentProviderClient:
         self._request_count += 1
         self._token_count += self._extract_usage_tokens(result)
         return result
+
+    async def chat_completions_stream(
+        self, payload: dict[str, Any],
+    ) -> AsyncIterator[str]:
+        """Stream content tokens from the LLM as they arrive.
+
+        Yields successive ``str`` deltas (the ``content`` field of each
+        OpenAI ``choices[0].delta``). The caller is responsible for
+        accumulating them. Raises ``ProviderRequestError`` on upstream
+        failure.
+
+        - **Direct mode**: passes ``stream=True`` to the upstream provider
+          (chutes / openai / openrouter / anthropic), iterates SSE chunks,
+          yields content as it arrives.
+        - **Proxy mode**: the subnet provider-proxy currently buffers
+          upstream responses and returns a single JSON body, so we fall
+          back to the unary path and yield the full content as one chunk.
+          Real streaming through the proxy will arrive in a follow-up
+          when the proxy adds an SSE pass-through endpoint.
+        """
+        self._check_quota()
+        if self._use_proxy():
+            # Graceful fallback — yield the full answer in one chunk.
+            result = await self._proxy_chat_completions(payload)
+            self._request_count += 1
+            self._token_count += self._extract_usage_tokens(result)
+            content = ""
+            try:
+                content = result["choices"][0]["message"].get("content") or ""
+            except (KeyError, IndexError, TypeError):
+                content = ""
+            if content:
+                yield content
+            return
+
+        async for chunk in self._direct_chat_completions_stream(payload):
+            yield chunk
+
+    async def _direct_chat_completions_stream(
+        self, payload: dict[str, Any],
+    ) -> AsyncIterator[str]:
+        if self.config.provider == "anthropic":
+            # Anthropic SSE is a different shape; for v0.2.4 we ship
+            # OpenAI-compatible streaming only (chutes / openai /
+            # openrouter). Fall back to non-streaming for anthropic.
+            result = await self._direct_chat_completions(payload)
+            self._request_count += 1
+            self._token_count += self._extract_usage_tokens(result)
+            content = ""
+            try:
+                content = result["choices"][0]["message"].get("content") or ""
+            except (KeyError, IndexError, TypeError):
+                content = ""
+            if content:
+                yield content
+            return
+
+        url, headers, body = self._direct_request_parts(payload)
+        body["stream"] = True
+        # Some providers also want stream_options.include_usage so the
+        # final chunk carries token counts; harmless if ignored.
+        body.setdefault("stream_options", {"include_usage": True})
+
+        usage_total: int = 0
+        async with httpx.AsyncClient(
+            timeout=self.config.per_request_timeout_seconds,
+        ) as client:
+            async with client.stream(
+                "POST", url, json=body, headers=headers,
+            ) as response:
+                self._raise_for_status(response)
+                async for line in response.aiter_lines():
+                    line = line.strip()
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data_str = line[len("data:"):].strip()
+                    if data_str == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        _logger.warning(
+                            "malformed SSE chunk from %s: %r",
+                            self.config.provider, data_str[:120],
+                        )
+                        continue
+                    # Final chunk may carry usage; book-keep it.
+                    usage = chunk.get("usage")
+                    if isinstance(usage, dict):
+                        usage_total = self._extract_usage_tokens({"usage": usage})
+                    choices = chunk.get("choices") or []
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta") or {}
+                    text = delta.get("content")
+                    if isinstance(text, str) and text:
+                        yield text
+        self._request_count += 1
+        self._token_count += usage_total
 
     def _use_proxy(self) -> bool:
         if self.config.mode == "proxy":

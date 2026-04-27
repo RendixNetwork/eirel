@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-04-27
+
+### Added
+
+- **`MinerApp` exposes `POST /v1/agent/infer/stream`** — the streaming
+  invocation route was missing from `MinerApp` in 0.2.3 (it was only on
+  `build_agent_app`). Validators and consumer-chat-api were 404'ing on
+  every miner using `MinerApp` and falling back to the unary path. This
+  release adds the route. With no other change, miners get a default
+  fallback that buffers the unary handler's response and emits one
+  `delta` + `done` chunk — same wire contract as `build_agent_app`.
+- **`MinerApp(agent_stream_handler=...)`** — optional constructor arg.
+  Pass an async generator that yields `StreamChunk | dict` objects to
+  enable real token-by-token streaming. The default fallback is used
+  when this is omitted.
+- **`AgentProviderClient.chat_completions_stream(payload)`** — async
+  generator that yields content deltas as the LLM produces them. Direct
+  mode passes `stream=True` to chutes / openai / openrouter and parses
+  SSE. Proxy mode (subnet provider-proxy) currently falls back to one
+  buffered chunk; real proxy-side streaming is a follow-up when the
+  provider-proxy adds an SSE pass-through endpoint. Anthropic also
+  falls back to non-streaming until per-provider SSE shapes are wired.
+
+### Why
+
+0.2.3 added the streaming route only to `build_agent_app`, but the
+common pattern — including the `examples/general_chat_agent` — uses
+`MinerApp`. So in practice every production miner returned 404 on the
+new endpoint and exercised the unary fallback. 0.2.4 closes the gap so
+`MinerApp`-based agents satisfy the streaming contract by default and
+can opt into real token streaming via `agent_stream_handler`.
+
 ## [0.2.3] - 2026-04-25
 
 ### Added

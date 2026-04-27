@@ -42,6 +42,7 @@ to direct provider calls when no proxy URL is configured.
 from __future__ import annotations
 
 import os
+from collections.abc import AsyncIterator
 from typing import Any
 
 from eirel.app import MinerApp
@@ -66,7 +67,7 @@ from eirel.families.general_chat.tools._service_client import (
     ToolServiceConfig,
 )
 from eirel.provider import AgentProviderClient, MinerProviderConfig
-from eirel.schemas import AgentInvocationRequest, AgentInvocationResponse
+from eirel.schemas import AgentInvocationRequest, AgentInvocationResponse, StreamChunk
 
 
 # Resolve provider config once at import time.  ``validate_for_runtime()``
@@ -153,11 +154,17 @@ def _extract_web_results(raw: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
-async def _run_turn(
+async def _prepare_turn(
     context: GeneralChatContext,
-    provider: AgentProviderClient,
     request: AgentInvocationRequest,
-) -> GeneralChatResponse:
+) -> tuple[TraceRecorder, dict[str, Any]]:
+    """Build the messages + LLM payload for a turn.
+
+    Runs web search up-front when enabled (so citations land in the
+    trace before the LLM call) and returns the trace + chat payload.
+    Shared between the unary `_run_turn` and the streaming
+    `_run_turn_stream` so the prep work is identical.
+    """
     budget = BudgetTracker(budget=context.budget)
     run_budget_usd = float(os.getenv("EIREL_RUN_BUDGET_USD", "30.0"))
     run_cost = RunCostTracker(budget=RunBudget(max_usd=run_budget_usd))
@@ -238,6 +245,17 @@ async def _run_turn(
         "messages": messages,
         "max_tokens": max_tokens,
     }
+    trace.set_metadata("mode", context.mode)
+    trace.set_metadata("web_search_enabled", context.web_search_enabled)
+    return trace, payload
+
+
+async def _run_turn(
+    context: GeneralChatContext,
+    provider: AgentProviderClient,
+    request: AgentInvocationRequest,
+) -> GeneralChatResponse:
+    trace, payload = await _prepare_turn(context, request)
     chat_response = await provider.chat_completions(payload)
     content = ""
     try:
@@ -245,9 +263,45 @@ async def _run_turn(
     except (KeyError, IndexError, TypeError):
         content = ""
     trace.add_content(content)
-    trace.set_metadata("mode", context.mode)
-    trace.set_metadata("web_search_enabled", context.web_search_enabled)
     return trace.freeze()
+
+
+async def _run_turn_stream(
+    context: GeneralChatContext,
+    provider: AgentProviderClient,
+    request: AgentInvocationRequest,
+) -> AsyncIterator[StreamChunk]:
+    """Stream LLM tokens as they arrive, ending with a final `done` chunk.
+
+    The `done` chunk mirrors the non-streaming response shape so the
+    consumer-chat-api / validator can recover the full answer + citations
+    without needing to also parse the per-token deltas. Citations are
+    populated by the upfront web_search call inside `_prepare_turn`, so
+    they're already in the trace by the time we yield the first delta.
+    """
+    trace, payload = await _prepare_turn(context, request)
+    accumulated: list[str] = []
+    try:
+        async for delta in provider.chat_completions_stream(payload):
+            if not delta:
+                continue
+            accumulated.append(delta)
+            yield StreamChunk(event="delta", text=delta)
+    except Exception as exc:  # noqa: BLE001 — fail loud, fail tagged
+        yield StreamChunk(event="done", status="failed", error=str(exc))
+        return
+
+    final_text = "".join(accumulated)
+    trace.add_content(final_text)
+    result = trace.freeze()
+    yield StreamChunk(
+        event="done",
+        output=result.model_dump(mode="json"),
+        citations=[c.url for c in result.citations],
+        tool_calls=[tc.model_dump(mode="json") for tc in result.tool_calls],
+        status="completed",
+        metadata={"mode": context.mode},
+    )
 
 
 async def _handle_chat(payload: dict[str, Any]) -> dict[str, Any]:
@@ -255,10 +309,8 @@ async def _handle_chat(payload: dict[str, Any]) -> dict[str, Any]:
     return await _PROVIDER_CLIENT.chat_completions(payload)
 
 
-async def _handle_agent(payload: dict[str, Any]) -> dict[str, Any]:
-    """Handle /v1/agent/infer — general_chat single-turn handler."""
+def _build_context(payload: dict[str, Any]) -> tuple[AgentInvocationRequest, GeneralChatContext]:
     request = AgentInvocationRequest.model_validate(payload)
-
     history_payload = dict(payload)
     if "messages" not in history_payload and not request.inputs.get("conversation_history"):
         history_payload.setdefault(
@@ -269,8 +321,12 @@ async def _handle_agent(payload: dict[str, Any]) -> dict[str, Any]:
             if request.primary_goal
             else [],
         )
+    return request, context_from_request(history_payload)
 
-    context = context_from_request(history_payload)
+
+async def _handle_agent(payload: dict[str, Any]) -> dict[str, Any]:
+    """Handle /v1/agent/infer — general_chat single-turn handler."""
+    request, context = _build_context(payload)
     result = await _run_turn(context, _PROVIDER_CLIENT, request)
 
     response = AgentInvocationResponse(
@@ -284,8 +340,24 @@ async def _handle_agent(payload: dict[str, Any]) -> dict[str, Any]:
     return response.model_dump(mode="json")
 
 
+async def _handle_agent_stream(
+    payload: dict[str, Any],
+) -> AsyncIterator[StreamChunk]:
+    """Handle /v1/agent/infer/stream — emits NDJSON StreamChunks.
+
+    Real token-by-token streaming when the provider supports it (direct
+    mode against chutes/openai/openrouter). When proxy mode is active
+    the SDK currently buffers the full answer and yields one big delta
+    — the wire contract still holds; only the UX differs.
+    """
+    request, context = _build_context(payload)
+    async for chunk in _run_turn_stream(context, _PROVIDER_CLIENT, request):
+        yield chunk
+
+
 app = MinerApp(
     title="Eirel General Chat Agent",
     handler=_handle_chat,
     agent_handler=_handle_agent,
+    agent_stream_handler=_handle_agent_stream,
 ).fastapi_app()
