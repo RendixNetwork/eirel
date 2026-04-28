@@ -19,6 +19,10 @@ _logger = logging.getLogger(__name__)
 
 def build_agent_app(agent: BaseAgent) -> FastAPI:
     app = FastAPI(title=f"{agent.capabilities.family_id}-agent")
+    # Owner-api stamps X-Eirel-Job-Id per task; capture it so
+    # AgentProviderClient forwards it on outbound provider-proxy calls.
+    from eirel.runtime_context import JobIdContextMiddleware
+    app.add_middleware(JobIdContextMiddleware)
 
     @app.get("/healthz")
     async def healthz():

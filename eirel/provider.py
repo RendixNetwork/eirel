@@ -289,9 +289,17 @@ class AgentProviderClient:
     async def _proxy_chat_completions(self, payload: dict[str, Any]) -> dict[str, Any]:
         if not self.config.subnet_proxy_url or not self.config.subnet_proxy_token:
             raise RuntimeError("subnet proxy mode requires proxy url and token")
+        # Per-request job_id from owner-api wins over the
+        # deployment-sticky env-var default. See runtime_context.py.
+        from eirel.runtime_context import get_active_job_id
+        job_id = (
+            get_active_job_id()
+            or self.config.subnet_proxy_job_id
+            or "miner-sdk-job"
+        )
         headers = {
             "Authorization": f"Bearer {self.config.subnet_proxy_token}",
-            "X-Eirel-Job-Id": self.config.subnet_proxy_job_id or "miner-sdk-job",
+            "X-Eirel-Job-Id": job_id,
         }
         if self.config.run_budget_usd is not None:
             headers["X-Eirel-Run-Budget-Usd"] = f"{self.config.run_budget_usd:.6f}"

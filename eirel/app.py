@@ -41,6 +41,11 @@ class MinerApp:
         self.agent_stream_handler = agent_stream_handler
         self.provider_config = provider_config
         self.app = FastAPI(title=title)
+        # Capture per-request job_id from owner-api (X-Eirel-Job-Id) so
+        # AgentProviderClient forwards it on outbound provider-proxy
+        # calls. See eirel.runtime_context for the full rationale.
+        from eirel.runtime_context import JobIdContextMiddleware
+        self.app.add_middleware(JobIdContextMiddleware)
 
         @self.app.get("/healthz")
         async def healthz(deep: int = Query(default=0)) -> dict[str, str]:
