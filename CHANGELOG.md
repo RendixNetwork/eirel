@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-04-28
+
+### Added
+
+- **`JobIdContextMiddleware`** (in `eirel.runtime_context`) — captures
+  the per-request `X-Eirel-Job-Id` header set by owner-api into a
+  `ContextVar`. `AgentProviderClient` (proxy mode) consults the
+  context on each call and forwards the captured job_id to the subnet
+  provider-proxy as the LLM-call attribution key, overriding the
+  deployment-sticky `EIREL_PROVIDER_PROXY_JOB_ID` env-var default.
+- Mounted automatically on `MinerApp` and `build_agent_app`. No agent
+  app changes required.
+
+### Why
+
+Owner-api stamps a unique `task-eval=<turn_id>;deployment=<id>` tag
+per validator request and reads back the provider-proxy ledger after
+the response stream closes, injecting `metadata.proxy_cost_usd` into
+the final `done` chunk. Without this middleware the miner would still
+charge under the deployment-sticky job_id and per-task cost
+attribution would silently lose precision. With 0.3.1 installed on
+the miner, owner-api's per-task cost lookup matches the actual LLM
+spend for that single task evaluation.
+
+The header is set by owner-api on the only path validator traffic
+takes to the miner pod, so the miner cannot tamper with attribution
+short of running a custom SDK that ignores the header (which is
+visible to operators as `metadata.proxy_cost_absent=true`).
+
 ## [0.3.0] - 2026-04-28
 
 ### Architecture
