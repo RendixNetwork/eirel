@@ -25,13 +25,17 @@ class _NonStreamingAgent(BaseAgent):
     """Override only `infer()` — exercises the default `infer_stream()` fallback."""
 
     async def infer(self, request: AgentInvocationRequest) -> AgentInvocationResponse:
+        # Slim 0.3.0 shape: executed tool calls live in metadata, not at
+        # the response top level.
         return AgentInvocationResponse(
             task_id=request.task_id,
             family_id=request.family_id,
             output={"answer": f"hello {request.subtask}"},
             citations=["https://example.com/a"],
-            tool_calls=[{"name": "search", "args": {"q": "x"}}],
-            metadata={"handled": True},
+            metadata={
+                "handled": True,
+                "executed_tool_calls": [{"name": "search", "args": {"q": "x"}}],
+            },
         )
 
 
@@ -57,7 +61,6 @@ class _StreamingAgent(BaseAgent):
             event="done",
             output={"answer": "part-one part-two"},
             citations=["https://example.com/x"],
-            tool_calls=[],
             status="completed",
         )
 
@@ -99,9 +102,9 @@ def test_default_infer_stream_emits_single_delta_then_done():
     assert chunks[0]["text"] == "hello world"
     assert chunks[-1]["event"] == "done"
     assert chunks[-1]["status"] == "completed"
-    # Citations + tool_calls passed through to the done chunk.
+    # Citations on the done chunk; executed tool calls live in metadata.
     assert chunks[-1]["citations"] == ["https://example.com/a"]
-    assert len(chunks[-1]["tool_calls"]) == 1
+    assert chunks[-1]["metadata"]["executed_tool_calls"][0]["name"] == "search"
 
 
 def test_streaming_agent_yields_multiple_deltas_in_order():

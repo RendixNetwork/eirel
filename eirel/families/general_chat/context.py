@@ -27,22 +27,33 @@ class GeneralChatContext:
 def context_from_request(request_payload: dict[str, Any]) -> GeneralChatContext:
     """Construct a GeneralChatContext from a raw invocation payload.
 
-    The payload should at minimum carry ``conversation_id`` (or
-    ``task_id``), ``inputs.mode``, ``inputs.web_search``, and either an
-    explicit ``inputs.conversation_history`` list or a ``messages`` list in
-    chat-completions format.
+    Reads the slim 0.3.0 contract first (top-level ``mode`` /
+    ``web_search`` / ``history``) and falls back to the legacy 0.2.x
+    shape (``inputs.mode`` / ``inputs.web_search`` / ``context_history``)
+    for one release so older orchestrators / validators keep working.
     """
     inputs: dict[str, Any] = request_payload.get("inputs") or {}
-    raw_mode = str(inputs.get("mode") or "instant")
+
+    # Mode: top-level wins, then inputs.mode, default instant.
+    raw_mode = str(
+        request_payload.get("mode")
+        or inputs.get("mode")
+        or "instant"
+    )
     if raw_mode not in ("instant", "thinking"):
         raise ValueError(f"unsupported mode {raw_mode!r}; expected 'instant' or 'thinking'")
     mode: ChatMode = raw_mode  # type: ignore[assignment]
 
-    web_search = bool(inputs.get("web_search", False))
+    # web_search: top-level wins, then inputs.web_search, default false.
+    if "web_search" in request_payload and isinstance(request_payload["web_search"], bool):
+        web_search = bool(request_payload["web_search"])
+    else:
+        web_search = bool(inputs.get("web_search", False))
     budget = get_budget(mode, web_search)
 
     conversation_id = str(
-        request_payload.get("conversation_id")
+        request_payload.get("turn_id")
+        or request_payload.get("conversation_id")
         or request_payload.get("session_id")
         or request_payload.get("task_id")
         or ""
@@ -50,8 +61,12 @@ def context_from_request(request_payload: dict[str, Any]) -> GeneralChatContext:
     hotkey = request_payload.get("hotkey") or request_payload.get("miner_hotkey")
     hotkey = str(hotkey) if hotkey else None
 
+    # History: prefer the slim ``history`` field, fall back to legacy
+    # ``context_history`` / ``inputs.conversation_history`` / ``messages``.
     raw_history: list[Any] = list(
-        inputs.get("conversation_history")
+        request_payload.get("history")
+        or request_payload.get("context_history")
+        or inputs.get("conversation_history")
         or request_payload.get("conversation_history")
         or request_payload.get("messages")
         or []

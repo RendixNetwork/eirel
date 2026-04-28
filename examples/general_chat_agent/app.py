@@ -131,6 +131,15 @@ def _build_catalog(
 def _last_user_message(
     context: GeneralChatContext, request: AgentInvocationRequest
 ) -> str:
+    """Extract the prompt the agent should answer.
+
+    Slim 0.3.0 contract: ``request.prompt`` is the latest user message;
+    ``history`` is everything that came before. Older 0.2.x callers
+    populated ``primary_goal`` / ``subtask`` instead — supported via the
+    schema's legacy fold validator.
+    """
+    if request.prompt:
+        return request.prompt
     for turn in reversed(context.conversation_history):
         if turn.role == "user" and turn.content:
             return turn.content
@@ -174,17 +183,28 @@ async def _prepare_turn(
     # provider-proxy alongside llm_cost_usd. Using request.task_id would
     # route charges to a non-existent per-task job and 404 in the proxy,
     # leaving DeploymentScoreRecord.tool_cost_usd at 0 forever.
-    catalog_job_id = os.getenv("EIREL_PROVIDER_PROXY_JOB_ID") or request.task_id
+    catalog_job_id = (
+        os.getenv("EIREL_PROVIDER_PROXY_JOB_ID")
+        or request.turn_id
+        or request.task_id
+    )
     catalog = _build_catalog(catalog_job_id, budget, trace)
     _ = run_cost  # available for per-run USD enforcement at the proxy layer
 
-    messages: list[dict[str, Any]] = [
+    # Slim contract: history holds the prior conversation turns,
+    # ``prompt`` is the latest user message. Append the latest message
+    # last so multi-turn replay is just history + prompt.
+    user_prompt = _last_user_message(context, request)
+    history_msgs = [
         {"role": turn.role, "content": turn.content}
         for turn in context.conversation_history
+        # filter the trailing user turn if it duplicates the prompt
+        # (legacy callers folded prompt into history)
     ]
-    user_prompt = _last_user_message(context, request)
-    if not messages:
-        messages = [{"role": "user", "content": user_prompt}]
+    if history_msgs and history_msgs[-1].get("role") == "user" and history_msgs[-1].get("content") == user_prompt:
+        messages: list[dict[str, Any]] = list(history_msgs)
+    else:
+        messages = list(history_msgs) + [{"role": "user", "content": user_prompt}]
 
     # When web_search is enabled, retrieve fresh web context up-front and
     # inject it as a system note before the LLM call.  This deterministically
@@ -298,9 +318,11 @@ async def _run_turn_stream(
         event="done",
         output=result.model_dump(mode="json"),
         citations=[c.url for c in result.citations],
-        tool_calls=[tc.model_dump(mode="json") for tc in result.tool_calls],
         status="completed",
-        metadata={"mode": context.mode},
+        metadata={
+            "mode": context.mode,
+            "executed_tool_calls": [tc.model_dump(mode="json") for tc in result.tool_calls],
+        },
     )
 
 
@@ -310,18 +332,14 @@ async def _handle_chat(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _build_context(payload: dict[str, Any]) -> tuple[AgentInvocationRequest, GeneralChatContext]:
+    """Validate the wire body and build the family-local context.
+
+    Trusts the schema's ``fold_legacy_fields`` validator to normalise
+    0.2.x bodies into the slim 0.3.0 shape, so by the time we hit the
+    family code we just have ``prompt``, ``history``, ``mode``, ``web_search``.
+    """
     request = AgentInvocationRequest.model_validate(payload)
-    history_payload = dict(payload)
-    if "messages" not in history_payload and not request.inputs.get("conversation_history"):
-        history_payload.setdefault(
-            "messages",
-            [
-                ConversationTurn(role="user", content=request.primary_goal).model_dump()
-            ]
-            if request.primary_goal
-            else [],
-        )
-    return request, context_from_request(history_payload)
+    return request, context_from_request(payload)
 
 
 async def _handle_agent(payload: dict[str, Any]) -> dict[str, Any]:
@@ -330,12 +348,18 @@ async def _handle_agent(payload: dict[str, Any]) -> dict[str, Any]:
     result = await _run_turn(context, _PROVIDER_CLIENT, request)
 
     response = AgentInvocationResponse(
-        task_id=request.task_id,
+        task_id=request.turn_id or request.task_id,
         family_id=request.family_id,
         status="completed",
         output=result.model_dump(mode="json"),
         citations=[c.url for c in result.citations],
-        tool_calls=[tc.model_dump(mode="json") for tc in result.tool_calls],
+        metadata={
+            "mode": context.mode,
+            "web_search": context.web_search_enabled,
+            "executed_tool_calls": [
+                tc.model_dump(mode="json") for tc in result.tool_calls
+            ],
+        },
     )
     return response.model_dump(mode="json")
 

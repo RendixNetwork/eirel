@@ -349,8 +349,12 @@ def infer_response_from_chat_payload(
         family_id=request.family_id,
         output={output_key: content},
         citations=_extract_citations(content),
-        tool_calls=tool_calls,
-        metadata={"compatibility_mode": "chat_completions"},
+        # 0.3.0: executed tool calls live under metadata, not at the
+        # response top level.
+        metadata={
+            "compatibility_mode": "chat_completions",
+            "executed_tool_calls": tool_calls,
+        },
     ).model_dump(mode="json")
 
 

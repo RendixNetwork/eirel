@@ -42,6 +42,8 @@ def test_agent_invocation_request_accepts_v3_runtime_fields():
 
 
 def test_agent_invocation_response_accepts_v3_runtime_fields():
+    # 0.3.0 contract: top-level ``tool_calls`` is gone; executed tool
+    # calls live under ``metadata.executed_tool_calls``.
     response = AgentInvocationResponse.model_validate(
         {
             "task_id": "task-1",
@@ -51,7 +53,7 @@ def test_agent_invocation_response_accepts_v3_runtime_fields():
             "checkpoint_events": [{"event": "paused", "checkpoint_id": "cp-1"}],
             "runtime_state_patch": {"draft": "step-1"},
             "resume_token": "resume-1",
-            "tool_calls": [{"name": "lookup_spec"}],
+            "metadata": {"executed_tool_calls": [{"name": "lookup_spec"}]},
             "reliability_score": 0.91,
             "recovery_score": 0.44,
         }
@@ -60,7 +62,7 @@ def test_agent_invocation_response_accepts_v3_runtime_fields():
     assert response.checkpoint_events == [{"event": "paused", "checkpoint_id": "cp-1"}]
     assert response.runtime_state_patch == {"draft": "step-1"}
     assert response.resume_token == "resume-1"
-    assert response.tool_calls == [{"name": "lookup_spec"}]
+    assert response.metadata["executed_tool_calls"] == [{"name": "lookup_spec"}]
     assert response.reliability_score == 0.91
     assert response.recovery_score == 0.44
 
@@ -216,6 +218,9 @@ def test_chat_helpers_preserve_runtime_context_and_tool_calls():
         },
     )
 
-    assert agent_response["tool_calls"][0]["function"]["name"] == "retrieval_search"
+    assert (
+        agent_response["metadata"]["executed_tool_calls"][0]["function"]["name"]
+        == "retrieval_search"
+    )
     assert agent_response["metadata"]["compatibility_mode"] == "chat_completions"
 

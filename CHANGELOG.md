@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-04-28
+
+### Architecture
+
+The subnet is repositioning around a **multi-agent / multi-family**
+shape. A future DAG orchestrator will route consumer requests across
+specialist family agents. `general_chat` is the first family — purely
+specialized for general chat, no orchestration responsibility. The
+0.3.0 release reshapes the family-agent contract to match: stateless,
+specialty-only, no session/orchestration leakage.
+
+### Changed (BREAKING)
+
+- **Slim agent invocation contract.** `AgentInvocationRequest` now
+  exposes flat `prompt`, `mode`, `web_search`, `history`, `turn_id`
+  fields. The legacy bag (`primary_goal`, `subtask`, `inputs`,
+  `context_history`, `family_id`, plus the workflow-DAG fields) remains
+  on the model **for one release only** and is auto-folded into the
+  new fields by a model validator. Validators / orchestrators now
+  populate **both** during the migration window. After 0.4.0 the
+  legacy fields are removed.
+- **`AgentInvocationResponse.tool_calls` removed.** The top-level field
+  conflated "what the LLM emitted" with "what the agent's Python ran"
+  and clashed with the OpenAI naming. Executed tool calls now live
+  under `metadata["executed_tool_calls"]`. Same change on
+  `StreamChunk` — the trailing `done` chunk no longer carries
+  top-level `tool_calls`.
+- **Answer-key leak fixed.** The validator's `_build_body` previously
+  merged `task.expected_output` into the miner-visible payload via
+  `inputs.expected_output`. Datasets that populated this field
+  effectively shipped the grading key on every call. The slim body
+  drops `expected_output` and `metadata` entirely from the wire.
+
+### Added
+
+- `ChatRequest` (consumer-chat-api) gains `mode` (`instant`/`thinking`)
+  and `web_search` fields, propagated through to the family agent on
+  every turn.
+- `context_from_request()` reads the new flat fields first and falls
+  back to the 0.2.x shape, so an agent built against 0.3.0 keeps
+  parsing legacy traffic during the migration.
+
+### Migration notes
+
+- Miners using `MinerApp` / `BaseAgent` should re-submit on 0.3.0 to
+  read the slim contract directly. 0.2.x miners continue to receive
+  legacy fields populated by the validator and the orchestrator.
+- Anything reading `response.tool_calls` must move to
+  `response.metadata["executed_tool_calls"]`. The `done` chunk uses
+  the same key.
+
 ## [0.2.4] - 2026-04-27
 
 ### Added

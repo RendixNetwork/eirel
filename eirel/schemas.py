@@ -74,11 +74,44 @@ class InvocationConstraints(BaseModel):
 
 
 class AgentInvocationRequest(BaseModel):
-    task_id: str
+    """Slim specialist contract.
+
+    Family agents are stateless specialists invoked by the orchestrator
+    (production) or the validator (eval). Both build the same body; the
+    family agent never sees session/orchestration state directly. The
+    contract is deliberately minimal:
+
+      * ``prompt``       — the latest user message to answer.
+      * ``history``      — prior conversation turns (user/assistant);
+                           may be empty for the first turn or for tasks
+                           with no preceding context.
+      * ``mode``         — ``"instant"`` for fast turnaround, ``"thinking"``
+                           for full reasoning.
+      * ``web_search``   — explicit per-turn toggle; the family must
+                           respect it.
+      * ``turn_id``      — opaque correlation id for trace tagging.
+
+    For one release the legacy fields (``primary_goal``, ``subtask``,
+    ``inputs``, ``context_history``, ``family_id``, plus the workflow
+    DAG bag) remain on the model so 0.2.x miners that read them keep
+    working while 0.3.0 miners migrate. Validators populate both the
+    new and the legacy shape during the migration window. After the
+    cut-over, all legacy fields are removed in 0.4.0.
+    """
+
+    # ── Slim contract (preferred) ───────────────────────────────────
+    prompt: str | None = None
+    history: list[ContextMessage] = Field(default_factory=list, max_length=100)
+    mode: Literal["instant", "thinking"] | None = None
+    web_search: bool | None = None
+    turn_id: str | None = None
+
+    # ── Legacy fields (deprecated; honored for 0.2.x miners) ────────
+    task_id: str | None = None
     session_id: str | None = None
-    primary_goal: str
-    subtask: str
-    family_id: FamilyId
+    primary_goal: str | None = None
+    subtask: str | None = None
+    family_id: FamilyId | None = None
     episode_id: str | None = None
     workflow_spec_id: str | None = None
     workflow_version: str | None = None
@@ -103,14 +136,49 @@ class AgentInvocationRequest(BaseModel):
 
     @field_validator("family_id", mode="before")
     @classmethod
-    def validate_family_id(cls, value: str) -> str:
+    def validate_family_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         return ensure_active_family_id(value)
+
+    @model_validator(mode="after")
+    def fold_legacy_fields(self) -> AgentInvocationRequest:
+        """Populate the slim fields from legacy fields when missing.
+
+        Lets 0.3.0 miners support both the new validator shape and
+        any straggler caller still on the 0.2.x body. Slim values
+        always win when both are present.
+        """
+        if self.prompt is None:
+            self.prompt = self.primary_goal or self.subtask
+        if self.mode is None and isinstance(self.inputs, dict):
+            raw_mode = self.inputs.get("mode")
+            if isinstance(raw_mode, str) and raw_mode in {"instant", "thinking"}:
+                self.mode = raw_mode  # type: ignore[assignment]
+        if self.web_search is None and isinstance(self.inputs, dict):
+            raw = self.inputs.get("web_search")
+            if isinstance(raw, bool):
+                self.web_search = raw
+        if not self.history and self.context_history:
+            self.history = list(self.context_history)
+        if self.turn_id is None:
+            self.turn_id = self.task_id
+        return self
 
     @model_validator(mode="after")
     def enforce_nesting_depth(self):
         _check_depth(self.metadata, MAX_METADATA_DEPTH, "metadata")
         _check_depth(self.inputs, MAX_METADATA_DEPTH, "inputs")
         _check_depth(self.context_bundle, MAX_METADATA_DEPTH, "context_bundle")
+        return self
+
+    @model_validator(mode="after")
+    def require_prompt(self) -> AgentInvocationRequest:
+        if not self.prompt:
+            raise ValueError(
+                "AgentInvocationRequest requires `prompt` "
+                "(or legacy `primary_goal`/`subtask`)"
+            )
         return self
 
 
@@ -139,10 +207,13 @@ class StreamChunk(BaseModel):
       - `citation`  : `citation` carries one URL/title pair the agent
                       wants to attribute. Equivalent to the citations
                       list on the non-streaming response.
-      - `done`      : terminal chunk. `output`, `citations`, `tool_calls`,
-                      and `metadata` mirror the non-streaming
+      - `done`      : terminal chunk. `output`, `citations`, and
+                      `metadata` mirror the non-streaming
                       AgentInvocationResponse so callers that only need
-                      the final state can ignore the deltas.
+                      the final state can ignore the deltas. Executed
+                      tool calls live in ``metadata.executed_tool_calls``
+                      from 0.3.0 onward (top-level ``tool_calls``
+                      removed).
     """
 
     event: Literal["delta", "tool_call", "citation", "done"]
@@ -151,15 +222,28 @@ class StreamChunk(BaseModel):
     citation: dict[str, Any] | None = None
     output: dict[str, Any] | None = None
     citations: list[str] | None = None
-    tool_calls: list[dict[str, Any]] | None = None
     status: Literal["completed", "failed", "deferred"] | None = None
     error: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class AgentInvocationResponse(BaseModel):
-    task_id: str
-    family_id: FamilyId
+    """Family agent response shape.
+
+    Slim by design — the orchestrator and validator only need the
+    answer text (``output``), the citations the agent gathered, and a
+    status. Anything trace-related (executed tool calls, latency
+    breakdown, web search ledger) lives under ``metadata`` so callers
+    that only need the answer don't have to filter noise.
+
+    Note: ``tool_calls`` was a top-level field through 0.2.x. It mixed
+    "what the LLM emitted" with "what the Python code ran" and is
+    confused naming with the OpenAI convention. From 0.3.0 it is
+    surfaced as ``metadata["executed_tool_calls"]`` instead.
+    """
+
+    task_id: str | None = None
+    family_id: FamilyId | None = None
     status: Literal["completed", "failed", "deferred"] = "completed"
     output: dict[str, Any] = Field(default_factory=dict)
     artifacts: list[ArtifactReference] = Field(default_factory=list)
@@ -167,10 +251,11 @@ class AgentInvocationResponse(BaseModel):
     latency_ms: int = Field(default=0, ge=0)
     cost_tao: float = Field(default=0.0, ge=0.0)
     error: str | None = None
+    # Workflow-runtime fields used by the orchestrator's deferred /
+    # checkpointing path. Family agents themselves don't populate these.
     checkpoint_events: list[dict[str, Any]] = Field(default_factory=list)
     runtime_state_patch: dict[str, Any] = Field(default_factory=dict)
     resume_token: str | None = None
-    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
     reliability_score: float | None = Field(default=None, ge=0.0, le=1.0)
     recovery_score: float | None = Field(default=None, ge=0.0, le=1.0)
     progress: dict[str, Any] | None = None
@@ -178,7 +263,9 @@ class AgentInvocationResponse(BaseModel):
 
     @field_validator("family_id", mode="before")
     @classmethod
-    def validate_response_family_id(cls, value: str) -> str:
+    def validate_response_family_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         return ensure_active_family_id(value)
 
 

@@ -52,11 +52,14 @@ class BaseAgent(ABC):
                 break
         if text:
             yield StreamChunk(event="delta", text=text)
+        # 0.3.0: executed tool calls travel inside metadata; the StreamChunk
+        # no longer has a top-level ``tool_calls`` field. Pass metadata
+        # through verbatim so anything the agent recorded (including any
+        # ``executed_tool_calls`` key) survives the unary→stream adapter.
         yield StreamChunk(
             event="done",
             output=out,
             citations=list(response.citations or []),
-            tool_calls=list(response.tool_calls or []),
             status=response.status,
             error=response.error,
             metadata=dict(response.metadata or {}),
