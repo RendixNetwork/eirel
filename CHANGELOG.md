@@ -5,7 +5,186 @@ All notable changes to the Eirel SDK are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.0] - 2026-05-05
+
+This is a substantial release that re-bases the SDK around a graph
+authoring shape (``StateGraph`` + ``GraphAgent``) and ships the
+checkpoint / memory / safety / structured / tracing primitive
+packages miners need for production-grade agent design. Legacy
+schema fields are removed in the same release; the slim contract
+(``prompt`` + ``history``) is now THE contract.
+
+**This is a breaking release.** Miners reading legacy fields
+(``primary_goal``, ``subtask``, ``context_history``, ``tools``,
+``tool_choice``, ``execution_mode``) will fail to deserialize 0.4.0
+``AgentInvocationRequest``. Migration guide below.
+
+### Added
+
+#### Graph SDK — the canonical authoring shape
+
+- **``eirel.graph`` package**: ``StateGraph`` builder
+  (``add_node`` / ``add_edge`` / ``add_conditional_edges`` /
+  ``add_parallel_edges`` / ``set_entry_point`` / ``compile``),
+  typed ``GraphState`` with reducer registry (``add_messages``,
+  ``merge_dict``, ``replace``), ``Node`` / ``ToolNode`` /
+  ``LLMNode`` / ``BranchNode``, ``Edge`` / ``ConditionalEdge`` /
+  ``ParallelEdge``, async ``runtime`` executor with ``ContextVar``-
+  scoped ``RunContext`` carrying budget / cost / trace / job_id,
+  and ``compile``-time validation (no orphans, every path reaches
+  ``END``, cycles need explicit ``recursion_limit``).
+- **``eirel.graph.patterns`` sub-package**: ``SelfConsistencyNode``
+  (N-sample majority vote with pluggable aggregator),
+  ``ReflectionNode`` (generate → critique → revise loop with
+  ``max_iterations`` cap), ``PlannerExecutorNode`` (planner emits
+  ordered steps; executor runs them with replan-on-failure),
+  ``ReActNode`` (Thought → Action → Observation loop with step cap).
+- **``eirel.agents.GraphAgent``**: the canonical authoring class.
+  Wraps a ``CompiledGraph`` + ``to_state`` / ``from_state`` mappers.
+  ``MinerApp`` accepts any ``BaseAgent`` so wrapping is the
+  one-line bridge to existing infrastructure.
+- **``examples/graph_general_chat/app.py``**: full working
+  ``general_chat`` agent built as a graph — the reference shape
+  for new miners.
+
+#### Stateful agents — checkpoint + memory
+
+- **``eirel.checkpoint`` package**: ``Checkpointer`` ABC
+  (``aput`` / ``aget`` / ``alist`` / ``adelete``); concrete
+  ``MemoryCheckpointer``, ``SqliteCheckpointer`` (``eirel[sqlite]``
+  extra), ``PostgresCheckpointer`` (``eirel[postgres]`` extra).
+  ``encode_thread_id(thread_id, checkpoint_id)`` reuses the
+  existing HMAC scheme from ``token_signing``. Hard cap of 256 KB
+  per checkpoint blob; over-cap forces rolling-summary path.
+- **``eirel.memory`` package**: ``RollingSummary`` (re-summarizes
+  the head of ``messages`` every N turns); ``VectorStore`` ABC with
+  Chroma / Qdrant adapters under extras.
+
+#### Safety + tracing + structured output
+
+- **``eirel.safety`` package**: ``Guard`` ABC with ``pre_input`` +
+  ``post_output`` hooks; ``GuardVerdict(allow, reason, redactions)``;
+  built-in ``NoopGuard``, ``ChainedGuard``. Optional adapters under
+  ``eirel[safety-llamaguard]`` / ``eirel[safety-nemo]``. Graph
+  runtime calls ``Guard.pre_input`` before entry and
+  ``Guard.post_output`` before ``END``.
+- **``eirel.tracing`` package**: ``Tracer`` ABC
+  (``span_start`` / ``span_end`` / ``event``); built-in
+  ``NoopTracer``, ``StdoutTracer``; ``LangfuseTracer`` under
+  ``eirel[tracing-langfuse]``. Graph runtime emits per-node spans.
+- **``eirel.structured`` package**: ``StructuredOutputNode(schema)``
+  with bounded retry + JSON repair (Outlines-compatible interface,
+  no hard dep). Multimodal helpers (``ImageInput``, ``AudioInput``)
+  carried in ``ContextMessage.metadata``.
+
+#### Tool catalog upgrades
+
+- **``UrlFetchTool``** added to ``general_chat`` family
+  (``EIREL_URL_FETCH_URL`` / ``EIREL_URL_FETCH_TOKEN`` env). Tool
+  spec ``{url, max_chars?, include_links?}`` →
+  ``{title, content, links[], status_code, content_type}``.
+  Talks to owner-api's url-fetch service with hotkey-style auth,
+  per-host rate limits, and a 1 MB response cap.
+- **Sandbox session persistence**: ``SandboxTool`` parameters now
+  include ``session_id`` for kernel reuse across calls (5-min idle
+  TTL) and ``attachments`` for pre-mounted files. Response includes
+  ``files`` for files written into the sandbox FS during execution.
+  ``SandboxSession`` convenience wrapper threads the same
+  ``session_id`` across multiple calls.
+- **``RetryPolicy``** and **``FallbackChain``** on
+  ``GeneralChatToolCatalog``. ``execute_with_policy(name, args,
+  policy=)`` keeps the existing ``execute(...)`` byte-identical;
+  ``execute_many`` accepts per-call ``policy`` in
+  ``PendingToolCall.policy``. Recovery from transient tool errors
+  is now a primitive, not bespoke graph wiring.
+
+#### Schema additions
+
+- **``Turn`` Pydantic model**: ``{user: str, assistant: str | None}``
+  pair. Mirrors the eval pool's source-row shape.
+- **``AgentInvocationRequest.turns: list[Turn] | None``**: optional
+  structured transcript for multi-turn fixture dispatch (eval mode).
+  When set, ``history`` is also populated (flattened) so naive
+  miners that only read ``history`` keep working; agents with
+  session-memory infrastructure should prefer ``turns`` for the
+  structural signal. Documented expectation: agents infer task
+  shape from prompt / history / turns / inputs content — there is
+  intentionally NO category field on the wire (eval and product
+  traffic are indistinguishable).
+- **``manifest.runtime.kind``** now accepts ``"graph"`` for
+  graph-runtime miners alongside the default ``"base_agent"``.
+  Owner-api uses the kind to discriminate dispatch (chat-completions
+  envelope vs graph-runtime envelope).
+
+### Removed (BREAKING)
+
+- **All BaseAgent deprecation machinery.** ``__init_subclass__``
+  warning, ``_CANONICAL_SUBCLASSES`` frozenset, and the
+  ``BaseAgent.from_graph`` classmethod shim are gone. ``BaseAgent``
+  is now the minimal abstract base ``GraphAgent`` (and any
+  hand-written subclass) inherits from. The deprecation warning
+  was originally targeted for 0.6.0 removal; brought forward.
+- **Legacy schema fields on ``AgentInvocationRequest``** —
+  ``primary_goal``, ``subtask``, ``context_history``, ``tools``,
+  ``tool_choice``, ``execution_mode``. The ``fold_legacy_fields``
+  validator that mapped them to the slim contract is also removed.
+  Slim contract (``prompt`` + ``history``) is now THE contract.
+- **``AgentInvocationResponse.progress``** field — was unused;
+  removed for cleanliness.
+- **``_request_runtime_value`` legacy fallback parameters**
+  (``legacy_input_key`` / ``legacy_metadata_key``) in
+  ``helpers.py``. ``workflow_request_context`` now reads canonical
+  fields only.
+- **``SemanticScholarTool`` and ``XApiTool``** — removed from the
+  ``general_chat`` family tool catalog. SDK modules and tests
+  deleted; ``EIREL_SEMANTIC_SCHOLAR_*`` / ``EIREL_X_API_*`` env vars
+  are no longer read. Migration: drop imports and the
+  corresponding entries from your tool catalog. ``WebSearchTool``
+  and ``SandboxTool`` remain; ``UrlFetchTool`` joins them.
+- **``tests/test_tool_protocol.py``** — entire file deleted (tested
+  the removed ``tools`` / ``tool_choice`` schema fields).
+- **``tests/test_base_agent_migration.py``** — was about deprecation
+  warnings; deleted with the deprecation machinery.
+- **``examples/general_chat_agent/``** directory deleted. Functionally
+  superseded by ``examples/graph_general_chat/`` (canonical graph
+  authoring shape) plus the inline minimal-``BaseAgent`` example
+  in the README's Quick Start. ``examples/sample_miner/`` remains
+  as the minimum-valid-submission reference + ``eirel compliance``
+  smoke target.
+
+### Changed
+
+- **``chat_payload_from_agent_request``** rewritten to use the
+  slim ``prompt`` + ``history`` contract. Legacy-field readers
+  no longer compile.
+- **``ContextMessage`` validator error message** now says "history"
+  instead of "context_history".
+
+### Migration from 0.3.x
+
+If your miner reads the old fields, change:
+
+```python
+# 0.3.x
+text = request.subtask or request.primary_goal
+for msg in request.context_history:
+    ...
+
+# 0.4.0
+text = request.prompt
+for msg in request.history:
+    ...
+```
+
+If your agent subclassed ``BaseAgent`` to consume the deprecation
+warning suppression, drop that — there is no warning anymore.
+``BaseAgent`` is a clean abstract base; subclassing or wrapping
+``GraphAgent`` both work.
+
+If your agent reads tool-platform env vars for X or Semantic
+Scholar, those tool services are removed from the family catalog.
+Replace with ``WebSearchTool`` (general) or use the new
+``UrlFetchTool`` for specific-URL extraction.
 
 ## [0.3.1] - 2026-04-28
 

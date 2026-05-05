@@ -49,11 +49,11 @@ class A2ATaskResponse(BaseModel):
 def a2a_request_from_invocation(request: AgentInvocationRequest) -> A2ATaskRequest:
     """Convert an Eirel AgentInvocationRequest to an A2A task request."""
     return A2ATaskRequest(
-        id=request.task_id,
+        id=request.task_id or "",
         message={
             "role": "user",
             "parts": [
-                {"type": "text", "text": request.subtask or request.primary_goal},
+                {"type": "text", "text": request.prompt or ""},
             ],
         },
         metadata={

@@ -24,31 +24,17 @@ def validate_agent_request(payload: dict) -> AgentInvocationRequest:
     return AgentInvocationRequest.model_validate(payload)
 
 
-def _request_field_present(request: AgentInvocationRequest, field_name: str) -> bool:
-    return field_name in request.model_fields_set
-
-
 def _request_runtime_value(
     request: AgentInvocationRequest,
     *,
     field_name: str,
-    legacy_input_key: str | None = None,
-    legacy_metadata_key: str | None = None,
     default: Any = None,
 ) -> Any:
     value = getattr(request, field_name)
-    if _request_field_present(request, field_name):
+    if field_name in request.model_fields_set:
         return value
     if value not in (None, {}, [], ""):
         return value
-    if legacy_input_key is not None:
-        legacy_input = request.inputs.get(legacy_input_key)
-        if legacy_input not in (None, {}, [], ""):
-            return legacy_input
-    if legacy_metadata_key is not None:
-        legacy_metadata = request.metadata.get(legacy_metadata_key)
-        if legacy_metadata not in (None, {}, [], ""):
-            return legacy_metadata
     return default
 
 
@@ -96,65 +82,37 @@ def build_tool_call(*, tool_id: str, name: str, arguments: dict) -> ToolCall:
 def workflow_request_context(request: AgentInvocationRequest) -> dict[str, Any]:
     return {
         "episode_id": _request_runtime_value(
-            request,
-            field_name="episode_id",
-            legacy_input_key="workflow_episode_id",
-            default=request.session_id,
+            request, field_name="episode_id", default=request.session_id,
         ),
         "workflow_spec_id": _request_runtime_value(
-            request,
-            field_name="workflow_spec_id",
-            legacy_metadata_key="workflow_spec_id",
+            request, field_name="workflow_spec_id",
         ),
         "workflow_version": _request_runtime_value(
-            request,
-            field_name="workflow_version",
-            legacy_metadata_key="workflow_version",
+            request, field_name="workflow_version",
         ),
         "planner_node_id": _request_runtime_value(
-            request,
-            field_name="planner_node_id",
-            legacy_metadata_key="planner_node_id",
+            request, field_name="planner_node_id",
         ),
         "role_id": _request_runtime_value(
-            request,
-            field_name="role_id",
-            legacy_metadata_key="role_id",
+            request, field_name="role_id",
         ),
         "upstream_node_outputs": _request_runtime_value(
-            request,
-            field_name="upstream_node_outputs",
-            legacy_input_key="upstream_node_outputs",
-            default={},
+            request, field_name="upstream_node_outputs", default={},
         ),
         "context_bundle": _request_runtime_value(
-            request,
-            field_name="context_bundle",
-            legacy_input_key="context_bundle",
-            default={},
+            request, field_name="context_bundle", default={},
         ),
         "checkpoint_state": _request_runtime_value(
-            request,
-            field_name="checkpoint_state",
-            legacy_input_key="checkpoint_state",
-            default={},
+            request, field_name="checkpoint_state", default={},
         ),
         "resume_token": _request_runtime_value(
-            request,
-            field_name="resume_token",
-            legacy_input_key="resume_token",
+            request, field_name="resume_token",
         ),
         "artifact_requirements": _request_runtime_value(
-            request,
-            field_name="artifact_requirements",
-            legacy_input_key="artifact_requirements",
-            default={},
+            request, field_name="artifact_requirements", default={},
         ),
         "trace_policy": _request_runtime_value(
-            request,
-            field_name="trace_policy",
-            legacy_metadata_key="trace_policy",
-            default={},
+            request, field_name="trace_policy", default={},
         ),
     }
 
@@ -309,24 +267,18 @@ def workflow_failed_response(
 
 def chat_payload_from_agent_request(request: AgentInvocationRequest) -> dict:
     messages: list[dict[str, str]] = []
-    if request.primary_goal:
-        messages.append({"role": "system", "content": request.primary_goal})
-    for item in request.context_history:
+    for item in request.history:
         if isinstance(item, ContextMessage):
             messages.append({"role": item.role, "content": item.content})
         else:
             messages.append({"role": item["role"], "content": item["content"]})
-    messages.append({"role": "user", "content": request.subtask})
+    messages.append({"role": "user", "content": request.prompt or ""})
     payload: dict[str, Any] = {
         "messages": messages,
         "temperature": 0.0,
         "max_tokens": 800,
         "agent_invocation": request.model_dump(mode="json"),
     }
-    if request.tools is not None:
-        payload["tools"] = [t.model_dump(mode="json") for t in request.tools]
-    if request.tool_choice is not None:
-        payload["tool_choice"] = request.tool_choice
     return payload
 
 

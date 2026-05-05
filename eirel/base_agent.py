@@ -14,6 +14,15 @@ from eirel.schemas import (
 
 
 class BaseAgent(ABC):
+    """Abstract base for miner agents.
+
+    The canonical authoring shape is to compose a graph with
+    :class:`~eirel.graph.graph.StateGraph`, compile it, and wrap the
+    compiled graph in :class:`~eirel.agents.graph_agent.GraphAgent`.
+    ``BaseAgent`` is the structural base ``GraphAgent`` inherits from —
+    direct subclassing is supported but uncommon.
+    """
+
     def __init__(self, *, hotkey: str, endpoint: str, version: str, capabilities: AgentCapabilityMetadata):
         self.hotkey = hotkey
         self.endpoint = endpoint.rstrip("/")
@@ -52,10 +61,9 @@ class BaseAgent(ABC):
                 break
         if text:
             yield StreamChunk(event="delta", text=text)
-        # 0.3.0: executed tool calls travel inside metadata; the StreamChunk
-        # no longer has a top-level ``tool_calls`` field. Pass metadata
-        # through verbatim so anything the agent recorded (including any
-        # ``executed_tool_calls`` key) survives the unary→stream adapter.
+        # Executed tool calls travel inside metadata; pass it through
+        # verbatim so anything the agent recorded survives the
+        # unary→stream adapter.
         yield StreamChunk(
             event="done",
             output=out,

@@ -62,8 +62,7 @@ def test_chat_completion_request_accepts_within_limit():
 def _base_request(**extras) -> dict:
     base = {
         "task_id": "t1",
-        "primary_goal": "g",
-        "subtask": "s",
+        "prompt": "s",
         "family_id": "general_chat",
     }
     base.update(extras)
@@ -109,7 +108,7 @@ def test_lists_count_as_depth(monkeypatch):
 def test_context_message_content_cap(monkeypatch):
     monkeypatch.setattr(eirel_models, "MAX_MESSAGE_CONTENT_BYTES", 8)
     # Reimport schemas so it picks up the patched constant via module-level import.
-    with pytest.raises(ValidationError, match="context_history content exceeds"):
+    with pytest.raises(ValidationError, match="history content exceeds"):
         eirel_schemas.ContextMessage.model_validate(
             {"role": "user", "content": "x" * 32}
         )

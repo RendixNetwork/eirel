@@ -12,13 +12,12 @@ from eirel.helpers import (
 from eirel.schemas import AgentInvocationRequest, AgentInvocationResponse
 
 
-def test_agent_invocation_request_accepts_v3_runtime_fields():
+def test_agent_invocation_request_accepts_runtime_fields():
     request = AgentInvocationRequest.model_validate(
         {
             "task_id": "task-1",
             "session_id": "session-1",
-            "primary_goal": "Research, build, and verify.",
-            "subtask": "Produce the next step.",
+            "prompt": "Produce the next step.",
             "family_id": "general_chat",
             "episode_id": "episode-1",
             "workflow_spec_id": "research_build_verify_v1",
@@ -67,27 +66,11 @@ def test_agent_invocation_response_accepts_v3_runtime_fields():
     assert response.recovery_score == 0.44
 
 
-def test_legacy_request_payload_still_validates_without_v3_runtime_fields():
-    request = AgentInvocationRequest.model_validate(
-        {
-            "task_id": "task-legacy",
-            "primary_goal": "Answer the question.",
-            "subtask": "Respond directly.",
-            "family_id": "general_chat",
-        }
-    )
-
-    assert request.workflow_spec_id is None
-    assert request.checkpoint_state == {}
-    assert request.trace_policy == {}
-
-
-def test_workflow_request_context_prefers_canonical_fields_then_legacy_fallbacks():
+def test_workflow_request_context_returns_canonical_fields():
     canonical = AgentInvocationRequest.model_validate(
         {
             "task_id": "task-canonical",
-            "primary_goal": "Do workflow work.",
-            "subtask": "Step",
+            "prompt": "Step",
             "family_id": "general_chat",
             "workflow_spec_id": "analysis_verify_v1",
             "planner_node_id": "analyst_plan",
@@ -95,50 +78,15 @@ def test_workflow_request_context_prefers_canonical_fields_then_legacy_fallbacks
             "context_bundle": {"mode": "canonical"},
             "checkpoint_state": {"draft": "v3"},
             "trace_policy": {"capture_tool_calls": True},
-            "inputs": {
-                "context_bundle": {"mode": "legacy"},
-                "checkpoint_state": {"draft": "legacy"},
-            },
-            "metadata": {
-                "planner_node_id": "legacy-node",
-                "trace_policy": {"capture_tool_calls": False},
-            },
-        }
-    )
-    legacy = AgentInvocationRequest.model_validate(
-        {
-            "task_id": "task-legacy",
-            "primary_goal": "Do workflow work.",
-            "subtask": "Step",
-            "family_id": "general_chat",
-            "inputs": {
-                "workflow_episode_id": "episode-legacy",
-                "upstream_node_outputs": {"analyst_plan": {"output": {"summary": "plan"}}},
-                "context_bundle": {"mode": "legacy"},
-                "checkpoint_state": {"draft": "legacy"},
-                "resume_token": "resume-legacy",
-                "artifact_requirements": {"code": "python"},
-            },
-            "metadata": {
-                "workflow_spec_id": "research_build_verify_v1",
-                "workflow_version": "v1",
-                "planner_node_id": "builder_impl",
-                "role_id": "implementation",
-                "trace_policy": {"capture_state_patch": True},
-            },
         }
     )
 
-    canonical_context = workflow_request_context(canonical)
-    legacy_context = workflow_request_context(legacy)
-
-    assert canonical_context["planner_node_id"] == "analyst_plan"
-    assert canonical_context["context_bundle"] == {"mode": "canonical"}
-    assert canonical_context["checkpoint_state"] == {"draft": "v3"}
-    assert legacy_context["episode_id"] == "episode-legacy"
-    assert legacy_context["workflow_spec_id"] == "research_build_verify_v1"
-    assert legacy_context["planner_node_id"] == "builder_impl"
-    assert legacy_context["artifact_requirements"] == {"code": "python"}
+    context = workflow_request_context(canonical)
+    assert context["planner_node_id"] == "analyst_plan"
+    assert context["context_bundle"] == {"mode": "canonical"}
+    assert context["checkpoint_state"] == {"draft": "v3"}
+    assert context["workflow_spec_id"] == "analysis_verify_v1"
+    assert context["trace_policy"] == {"capture_tool_calls": True}
 
 
 def test_workflow_response_helpers_emit_canonical_and_legacy_runtime_fields():
@@ -180,8 +128,7 @@ def test_workflow_response_helpers_emit_canonical_and_legacy_runtime_fields():
 def test_chat_helpers_preserve_runtime_context_and_tool_calls():
     request = AgentInvocationRequest(
         task_id="task-1",
-        primary_goal="Research the problem.",
-        subtask="Write a plan.",
+        prompt="Write a plan.",
         family_id="general_chat",
         episode_id="episode-1",
         workflow_spec_id="analysis_verify_v1",

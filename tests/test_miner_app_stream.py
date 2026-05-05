@@ -19,8 +19,7 @@ def _disable_auth(monkeypatch):
 def _agent_request_payload() -> dict:
     return {
         "task_id": "t-1",
-        "primary_goal": "say hi",
-        "subtask": "world",
+        "prompt": "world",
         "family_id": "general_chat",
     }
 

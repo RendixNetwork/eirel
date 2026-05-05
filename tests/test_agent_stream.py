@@ -30,7 +30,7 @@ class _NonStreamingAgent(BaseAgent):
         return AgentInvocationResponse(
             task_id=request.task_id,
             family_id=request.family_id,
-            output={"answer": f"hello {request.subtask}"},
+            output={"answer": f"hello {request.prompt}"},
             citations=["https://example.com/a"],
             metadata={
                 "handled": True,
@@ -68,8 +68,7 @@ class _StreamingAgent(BaseAgent):
 def _make_request_payload() -> dict:
     return {
         "task_id": "t-1",
-        "primary_goal": "say hi",
-        "subtask": "world",
+        "prompt": "world",
         "family_id": "general_chat",
     }
 

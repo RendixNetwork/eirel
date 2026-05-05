@@ -14,7 +14,7 @@ One family is active at launch:
 
 | Family | Role |
 |--------|------|
-| **general_chat** | Multi-turn conversational assistant with optional web search, across `instant` and `thinking` modes. Backed by owner-routed tool services for web search, X, Semantic Scholar, and a server-side Python sandbox for verifiable computation. |
+| **general_chat** | Multi-turn conversational assistant with optional web search, across `instant` and `thinking` modes. Backed by owner-routed tool services for web search, URL fetching, and a server-side Python sandbox (with session persistence + file passthrough) for verifiable computation. |
 
 Additional families (`deep_research`, `coding`) are defined on the roadmap and will activate in future releases.
 
@@ -31,7 +31,93 @@ Requires Python >= 3.12.
 
 ## Building a Miner
 
-### Minimal Agent (Typed Invocation)
+The SDK supports two authoring shapes:
+
+1. **Graph agent** (canonical, recommended) — compose a `StateGraph`
+   and wrap with `GraphAgent`. Gets you parallel tool dispatch,
+   conditional routing, checkpointing, memory, safety guards, and
+   tracing as primitives.
+2. **Minimal agent** — subclass `BaseAgent` directly, implement
+   `async def infer`. Fewer primitives but minimal scaffolding.
+
+Both ship through the same `MinerApp` and produce the same wire
+contract — the difference is what's available inside your agent.
+
+### Building a Graph Agent (canonical)
+
+```python
+from eirel import (
+    AgentCapabilityMetadata, AgentInvocationRequest, AgentInvocationResponse,
+    GraphAgent, StateGraph, END, build_agent_app, content_response,
+)
+from eirel.provider import AgentProviderClient, MinerProviderConfig
+import uvicorn
+
+# 1. Define your graph state.
+graph_state = {
+    "messages": [],     # add_messages reducer (append-only)
+    "answer": None,     # replace reducer (overwrite)
+}
+
+# 2. Define nodes.
+async def llm_node(state, ctx):
+    config = MinerProviderConfig.from_env()
+    client = AgentProviderClient(config)
+    reply = await client.chat_completions({"messages": state["messages"]})
+    text = reply["choices"][0]["message"]["content"]
+    return {"answer": text}
+
+# 3. Compose the graph.
+graph = (
+    StateGraph(state_schema=graph_state)
+    .add_node("llm", llm_node)
+    .set_entry_point("llm")
+    .add_edge("llm", END)
+    .compile()
+)
+
+# 4. Wire to_state / from_state mappers (slim contract → graph state).
+def to_state(request: AgentInvocationRequest) -> dict:
+    return {
+        "messages": [
+            *[{"role": m.role, "content": m.content} for m in request.history],
+            {"role": "user", "content": request.prompt},
+        ],
+    }
+
+def from_state(state: dict, request: AgentInvocationRequest) -> AgentInvocationResponse:
+    return content_response(
+        state["answer"],
+        task_id=request.task_id,
+        family_id=request.family_id,
+    )
+
+# 5. Wrap as GraphAgent.
+agent = GraphAgent(
+    hotkey="5FHne...",
+    endpoint="http://miner.example.com:9000",
+    version="1.0.0",
+    capabilities=AgentCapabilityMetadata(
+        family_id="general_chat",
+        description="Conversational assistant (graph)",
+        latency_ms_p50=2000,
+        estimated_cost_tao=0.1,
+    ),
+    graph=graph,
+    to_state=to_state,
+    from_state=from_state,
+)
+
+app = build_agent_app(agent)
+uvicorn.run(app, host="0.0.0.0", port=9000)
+```
+
+The full reference implementation lives at
+`examples/graph_general_chat/app.py` — includes parallel tool
+dispatch, conditional routing, and the proper `manifest.runtime.kind = "graph"`
+wiring.
+
+### Minimal Agent (BaseAgent subclass)
 
 ```python
 from eirel import (
@@ -50,9 +136,13 @@ class MyChatAgent(BaseAgent):
         self.provider_client = AgentProviderClient(config)
 
     async def infer(self, request: AgentInvocationRequest) -> AgentInvocationResponse:
-        reply = await self.provider_client.chat_completions({
-            "messages": [{"role": "user", "content": request.primary_goal}],
-        })
+        # Slim contract — read prompt + history, NOT primary_goal/subtask
+        # (those legacy fields were removed in 0.4.0).
+        messages = [
+            *[{"role": m.role, "content": m.content} for m in request.history],
+            {"role": "user", "content": request.prompt},
+        ]
+        reply = await self.provider_client.chat_completions({"messages": messages})
         text = reply["choices"][0]["message"]["content"]
         return content_response(text, task_id=request.task_id, family_id=request.family_id)
 
@@ -71,6 +161,24 @@ agent = MyChatAgent(
 app = build_agent_app(agent)
 uvicorn.run(app, host="0.0.0.0", port=9000)
 ```
+
+### Multi-turn fixtures
+
+When the validator dispatches a multi-turn fixture (eval-mode), the
+request carries `request.turns: list[Turn]` with the full scripted
+transcript in addition to `request.history` (flattened). Agents with
+session-memory infrastructure (retrieval, rolling summarization,
+structured fact extraction) should prefer `turns` for the structural
+signal. Naive miners reading only `history` keep working unchanged.
+
+Tasks with attached content surface the document under
+`request.inputs.document_text` (single doc) or
+`request.inputs.attached_documents` (list[str]). Agents that handle
+document tasks should inspect these keys.
+
+There is intentionally no `category` field on the wire — eval and
+product traffic are indistinguishable, so the agent should infer
+task shape from `prompt` / `history` / `turns` / `inputs` content.
 
 > **Inbound auth.** `build_agent_app` and `MinerApp` now require validator requests to
 > carry the signing headers emitted by `eirel.signing.Signer` (`X-Hotkey`,
@@ -123,20 +231,62 @@ Provider configuration via environment variables:
 
 | Model | Description |
 |-------|-------------|
-| `AgentInvocationRequest` | Task input: goal, family_id, tools, constraints, workflow metadata |
+| `AgentInvocationRequest` | Task input: prompt, history, mode, web_search, optional turns + inputs (slim contract — legacy fields removed in 0.4.0) |
 | `AgentInvocationResponse` | Task output: status, output dict, artifacts, citations, resume tokens |
 | `AgentCapabilityMetadata` | Agent capabilities: family, latency, cost, context limits |
 | `AgentHealthStatus` | Health check response |
 | `AgentRegistrationMetadata` | Registration payload: hotkey, endpoint, family, version |
 | `InvocationConstraints` | Execution constraints: max latency, quality tier, modalities |
+| `ContextMessage` | Single conversation message (`role`, `content`, `metadata`) |
+| `Turn` | Multi-turn fixture pair (`user`, `assistant`) — eval-mode dispatch |
 
 ### Agent Framework
 
 | Surface | Description |
 |---------|-------------|
-| `BaseAgent` | Abstract class — implement `infer()`, `health()`, `registration()` |
+| `GraphAgent` | Canonical authoring class — wraps a compiled `StateGraph` + state mappers (recommended) |
+| `BaseAgent` | Abstract class — implement `infer()`, `health()`, `registration()` (minimal alternative) |
 | `MinerApp` | FastAPI wrapper with `/v1/chat/completions` and `/v1/agent/infer` |
-| `build_agent_app(agent)` | Standalone FastAPI app from a `BaseAgent` instance |
+| `build_agent_app(agent)` | Standalone FastAPI app from a `BaseAgent` (or `GraphAgent`) instance |
+
+### Graph SDK (canonical authoring)
+
+```python
+from eirel import StateGraph, END, GraphAgent
+from eirel.graph.patterns import (
+    SelfConsistencyNode, ReflectionNode, PlannerExecutorNode, ReActNode,
+)
+```
+
+| Surface | Purpose |
+|---------|---------|
+| `StateGraph` | Builder: `add_node`, `add_edge`, `add_conditional_edges`, `add_parallel_edges`, `set_entry_point`, `compile` |
+| `END` | Terminal node sentinel |
+| `Node` / `LLMNode` / `ToolNode` / `BranchNode` | Node primitives |
+| `Edge` / `ConditionalEdge` / `ParallelEdge` | Edge primitives |
+| `SelfConsistencyNode` | N-sample majority-vote with pluggable aggregator |
+| `ReflectionNode` | Generate → critique → revise loop |
+| `PlannerExecutorNode` | Decompose into ordered steps, execute, replan on failure |
+| `ReActNode` | Thought → Action → Observation loop |
+
+### Stateful primitives
+
+```python
+from eirel.checkpoint import (
+    Checkpointer, MemoryCheckpointer, SqliteCheckpointer, PostgresCheckpointer,
+)
+from eirel.memory import RollingSummary, VectorStore
+from eirel.safety import Guard, ChainedGuard, NoopGuard, GuardVerdict
+from eirel.tracing import Tracer, NoopTracer, StdoutTracer
+from eirel.structured import StructuredOutputNode
+```
+
+Optional adapters under extras:
+- `eirel[sqlite]` — `SqliteCheckpointer`
+- `eirel[postgres]` — `PostgresCheckpointer`
+- `eirel[chroma]` / `eirel[qdrant]` — vector store adapters
+- `eirel[safety-llamaguard]` / `eirel[safety-nemo]` — safety guards
+- `eirel[tracing-langfuse]` — Langfuse tracer
 
 ### Response Helpers
 
@@ -171,14 +321,18 @@ miner can hand to an LLM as OpenAI-style tool definitions:
 | Tool | Purpose | Env vars |
 |------|---------|----------|
 | `WebSearchTool` | Brave / Serper / Tavily web search | `EIREL_WEB_SEARCH_URL`, `EIREL_WEB_SEARCH_TOKEN` |
-| `SemanticScholarTool` | Academic paper lookup | `EIREL_SEMANTIC_SCHOLAR_URL`, `EIREL_SEMANTIC_SCHOLAR_TOKEN` |
-| `XApiTool` | X/Twitter search | `EIREL_X_API_URL`, `EIREL_X_API_TOKEN` |
-| `SandboxTool` | Server-side Python sandbox for verifiable computation | `EIREL_SANDBOX_URL`, `EIREL_SANDBOX_TOKEN` |
+| `UrlFetchTool` | Specific-URL extraction (HTML→text) | `EIREL_URL_FETCH_URL`, `EIREL_URL_FETCH_TOKEN` |
+| `SandboxTool` | Server-side Python sandbox for verifiable computation; supports `session_id` for kernel reuse and `attachments` / `files` for FS passthrough | `EIREL_SANDBOX_URL`, `EIREL_SANDBOX_TOKEN` |
 
-The shipping `general_chat_agent` example in `examples/general_chat_agent/` shows a
-reference integration: it builds a `GeneralChatToolCatalog`, invokes `web_search`
-when the validator passes `inputs.web_search=true`, injects results as a system
-note, and records citations on the `GeneralChatResponse`.
+`RetryPolicy` and `FallbackChain` are available on the catalog —
+`execute_with_policy(name, args, policy=)` and `execute_many` accept
+per-call retry/fallback so transient tool errors recover without
+bespoke graph wiring.
+
+The reference integration lives at `examples/graph_general_chat/app.py` —
+builds a `GeneralChatToolCatalog`, invokes `web_search` / `url_fetch` /
+`sandbox` from graph nodes, injects tool results into state, and records
+citations on the `GeneralChatResponse`.
 
 ## CLI
 

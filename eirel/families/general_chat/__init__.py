@@ -27,13 +27,14 @@ from eirel.families.general_chat.response import (
     TraceRecorder,
 )
 from eirel.families.general_chat.tools import (
+    FallbackChain,
     GeneralChatTool,
     GeneralChatToolCatalog,
+    RetryPolicy,
 )
-from eirel.families.general_chat.tools.sandbox import SandboxTool
-from eirel.families.general_chat.tools.semantic_scholar import SemanticScholarTool
+from eirel.families.general_chat.tools.sandbox import SandboxSession, SandboxTool
+from eirel.families.general_chat.tools.url_fetch import UrlFetchTool
 from eirel.families.general_chat.tools.web_search import WebSearchTool
-from eirel.families.general_chat.tools.x_api import XApiTool
 
 __all__ = [
     "BudgetExhaustedError",
@@ -42,24 +43,26 @@ __all__ = [
     "Citation",
     "ConversationResponse",
     "ConversationTurn",
+    "FallbackChain",
     "GeneralChatContext",
     "GeneralChatResponse",
     "GeneralChatTool",
     "GeneralChatToolCatalog",
+    "RetryPolicy",
     "INSTANT_BUDGET",
     "INSTANT_WEB_SEARCH_BUDGET",
     "ModeBudget",
     "RunBudget",
     "RunBudgetExhaustedError",
     "RunCostTracker",
+    "SandboxSession",
     "SandboxTool",
-    "SemanticScholarTool",
     "THINKING_BUDGET",
     "THINKING_WEB_SEARCH_BUDGET",
     "ToolCall",
     "TraceRecorder",
+    "UrlFetchTool",
     "WebSearchTool",
-    "XApiTool",
     "context_from_request",
     "get_budget",
 ]

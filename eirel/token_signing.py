@@ -15,6 +15,13 @@ import hmac
 import time
 
 
+# Resume tokens are valid for 48h. Surfaced as a public constant so the
+# graph checkpointer (``eirel.checkpoint``) can derive its retention
+# policy from the same number — there's no point persisting a checkpoint
+# longer than its resume token can authenticate.
+RESUME_TOKEN_TTL_SECONDS: int = 172_800
+
+
 class InvalidResumeToken(ValueError):
     """Raised when a resume token fails HMAC verification or is expired."""
 
@@ -43,7 +50,7 @@ def verify_resume_token(
     signed_token: str,
     secret: str | list[str],
     *,
-    max_age_seconds: int = 172800,
+    max_age_seconds: int = RESUME_TOKEN_TTL_SECONDS,
 ) -> str:
     """Verify a signed resume token and return the original payload string.
 

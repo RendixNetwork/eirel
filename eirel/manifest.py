@@ -46,6 +46,14 @@ class RuntimeInfo(BaseModel):
     port: int = 8080
     health_path: str = "/healthz"
     invoke_path: str = "/v1/chat/completions"
+    # Agent shape declared by the miner. ``base_agent`` (default) keeps
+    # the pre-graph behavior: a thin chat-completions handler. ``graph``
+    # opts the pod into the graph-runtime envelope so eirel-ai's
+    # streaming proxy uses a longer timeout, switches to the
+    # ``{thread_id, input, config, stream}`` payload shape, and tags
+    # downstream traces with ``runtime_kind=graph`` so eiretes can
+    # discriminate.
+    kind: Literal["base_agent", "graph"] = "base_agent"
 
     @field_validator("health_path", "invoke_path")
     @classmethod

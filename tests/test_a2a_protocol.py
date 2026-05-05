@@ -18,8 +18,7 @@ def _invocation_request() -> AgentInvocationRequest:
     return AgentInvocationRequest(
         task_id="t1",
         session_id="s1",
-        primary_goal="Research AI trends",
-        subtask="Find recent papers on AI agents",
+        prompt="Find recent papers on AI agents",
         family_id="general_chat",
         episode_id="e1",
     )
@@ -62,11 +61,10 @@ def test_a2a_request_from_invocation():
     assert a2a_req.metadata["family_id"] == "general_chat"
 
 
-def test_a2a_request_uses_primary_goal_when_no_subtask():
+def test_a2a_request_uses_prompt():
     request = AgentInvocationRequest(
         task_id="t2",
-        primary_goal="Research AI trends",
-        subtask="",
+        prompt="Research AI trends",
         family_id="general_chat",
     )
     a2a_req = a2a_request_from_invocation(request)

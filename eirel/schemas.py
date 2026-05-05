@@ -7,7 +7,6 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from eirel import models as _eirel_models
 from eirel.groups import FamilyId, ensure_active_family_id
-from eirel.models import ToolDefinition
 
 
 def _env_int(name: str, default: int) -> int:
@@ -60,10 +59,24 @@ class ContextMessage(BaseModel):
         limit = _eirel_models.MAX_MESSAGE_CONTENT_BYTES
         if len(value.encode("utf-8")) > limit:
             raise ValueError(
-                f"context_history content exceeds EIREL_MAX_MESSAGE_CONTENT_BYTES "
+                f"history content exceeds EIREL_MAX_MESSAGE_CONTENT_BYTES "
                 f"({limit} bytes)"
             )
         return value
+
+
+class Turn(BaseModel):
+    """One scripted turn from a multi-turn task fixture.
+
+    Used by ``AgentInvocationRequest.turns`` (eval-mode multi-turn
+    dispatch). Each entry pairs a user message with the validator's
+    pre-scripted assistant reply. The FINAL turn in a fixture has
+    ``assistant=None`` — that's the open turn the agent must answer.
+    """
+
+    model_config = {"extra": "forbid"}
+    user: str = Field(min_length=1, max_length=10_000)
+    assistant: str | None = Field(default=None, max_length=10_000)
 
 
 class InvocationConstraints(BaseModel):
@@ -85,32 +98,45 @@ class AgentInvocationRequest(BaseModel):
       * ``history``      — prior conversation turns (user/assistant);
                            may be empty for the first turn or for tasks
                            with no preceding context.
+      * ``turns``        — OPTIONAL structured conversation transcript
+                           for tasks where the validator dispatches a
+                           pre-scripted multi-turn fixture (eval mode).
+                           Carries ``[{user, assistant?}]`` entries; the
+                           final entry MAY have ``assistant=None`` to
+                           signal the open turn the agent must answer.
+                           When ``turns`` is set, ``history`` is also
+                           populated (flattened) so agents that only
+                           read ``history`` keep working — but agents
+                           with session-memory infrastructure should
+                           prefer ``turns`` for the structural signal.
       * ``mode``         — ``"instant"`` for fast turnaround, ``"thinking"``
                            for full reasoning.
       * ``web_search``   — explicit per-turn toggle; the family must
                            respect it.
       * ``turn_id``      — opaque correlation id for trace tagging.
 
-    For one release the legacy fields (``primary_goal``, ``subtask``,
-    ``inputs``, ``context_history``, ``family_id``, plus the workflow
-    DAG bag) remain on the model so 0.2.x miners that read them keep
-    working while 0.3.0 miners migrate. Validators populate both the
-    new and the legacy shape during the migration window. After the
-    cut-over, all legacy fields are removed in 0.4.0.
+    Agents should infer task shape from prompt/history/turns/inputs
+    content. There is no ``category`` field — eval and product traffic
+    are intentionally indistinguishable on the wire so behavior tuned
+    for one transfers cleanly to the other.
+
+    Tasks with attached content (long documents, CSVs, file uploads)
+    surface the content under ``inputs.document_text`` (single doc) or
+    ``inputs.attached_documents`` (list[str]). Agents that handle
+    document tasks should inspect these keys.
     """
 
     # ── Slim contract (preferred) ───────────────────────────────────
     prompt: str | None = None
     history: list[ContextMessage] = Field(default_factory=list, max_length=100)
+    turns: list[Turn] | None = None
     mode: Literal["instant", "thinking"] | None = None
     web_search: bool | None = None
     turn_id: str | None = None
 
-    # ── Legacy fields (deprecated; honored for 0.2.x miners) ────────
+    # ── Workflow-runtime fields (orchestrator-managed) ──────────────
     task_id: str | None = None
     session_id: str | None = None
-    primary_goal: str | None = None
-    subtask: str | None = None
     family_id: FamilyId | None = None
     episode_id: str | None = None
     workflow_spec_id: str | None = None
@@ -124,11 +150,7 @@ class AgentInvocationRequest(BaseModel):
     artifact_requirements: dict[str, Any] = Field(default_factory=dict)
     trace_policy: dict[str, Any] = Field(default_factory=dict)
     inputs: dict[str, Any] = Field(default_factory=dict)
-    context_history: list[ContextMessage] = Field(default_factory=list, max_length=100)
-    tools: list[ToolDefinition] | None = None
-    tool_choice: str | dict[str, Any] | None = None
     constraints: InvocationConstraints = Field(default_factory=InvocationConstraints)
-    execution_mode: str | None = None
     max_execution_seconds: int | None = Field(default=None, ge=1)
     callback_url: str | None = None
     checkpoint_interval_seconds: int | None = Field(default=None, ge=1)
@@ -142,30 +164,6 @@ class AgentInvocationRequest(BaseModel):
         return ensure_active_family_id(value)
 
     @model_validator(mode="after")
-    def fold_legacy_fields(self) -> AgentInvocationRequest:
-        """Populate the slim fields from legacy fields when missing.
-
-        Lets 0.3.0 miners support both the new validator shape and
-        any straggler caller still on the 0.2.x body. Slim values
-        always win when both are present.
-        """
-        if self.prompt is None:
-            self.prompt = self.primary_goal or self.subtask
-        if self.mode is None and isinstance(self.inputs, dict):
-            raw_mode = self.inputs.get("mode")
-            if isinstance(raw_mode, str) and raw_mode in {"instant", "thinking"}:
-                self.mode = raw_mode  # type: ignore[assignment]
-        if self.web_search is None and isinstance(self.inputs, dict):
-            raw = self.inputs.get("web_search")
-            if isinstance(raw, bool):
-                self.web_search = raw
-        if not self.history and self.context_history:
-            self.history = list(self.context_history)
-        if self.turn_id is None:
-            self.turn_id = self.task_id
-        return self
-
-    @model_validator(mode="after")
     def enforce_nesting_depth(self):
         _check_depth(self.metadata, MAX_METADATA_DEPTH, "metadata")
         _check_depth(self.inputs, MAX_METADATA_DEPTH, "inputs")
@@ -175,10 +173,7 @@ class AgentInvocationRequest(BaseModel):
     @model_validator(mode="after")
     def require_prompt(self) -> AgentInvocationRequest:
         if not self.prompt:
-            raise ValueError(
-                "AgentInvocationRequest requires `prompt` "
-                "(or legacy `primary_goal`/`subtask`)"
-            )
+            raise ValueError("AgentInvocationRequest requires `prompt`")
         return self
 
 
@@ -258,7 +253,6 @@ class AgentInvocationResponse(BaseModel):
     resume_token: str | None = None
     reliability_score: float | None = Field(default=None, ge=0.0, le=1.0)
     recovery_score: float | None = Field(default=None, ge=0.0, le=1.0)
-    progress: dict[str, Any] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("family_id", mode="before")

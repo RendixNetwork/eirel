@@ -15,7 +15,7 @@ purposes:
 
 This example does NOT demonstrate LLM provider usage.  For a realistic miner
 that calls an LLM through the subnet provider-proxy, see
-``examples/general_chat_agent/app.py``.
+``examples/graph_general_chat/app.py``.
 """
 from __future__ import annotations
 

@@ -47,7 +47,7 @@ def test_tool_call_round_trip():
 
 
 def test_tool_call_defaults():
-    tc = ToolCall(tool_name="x_api")
+    tc = ToolCall(tool_name="sandbox")
     assert tc.args == {}
     assert tc.result_digest is None
     assert tc.latency_ms == 0
@@ -55,7 +55,7 @@ def test_tool_call_defaults():
 
 def test_tool_call_negative_latency_rejected():
     with pytest.raises(ValidationError):
-        ToolCall(tool_name="x_api", latency_ms=-1)
+        ToolCall(tool_name="sandbox", latency_ms=-1)
 
 
 def test_general_chat_response_round_trip():
@@ -130,7 +130,7 @@ def test_trace_recorder_freeze_returns_independent_copy():
     rec.add_content("hi")
     response = rec.freeze()
     rec.add_content("more")
-    rec.record_tool_call(ToolCall(tool_name="x_api"))
+    rec.record_tool_call(ToolCall(tool_name="sandbox"))
     # The previously frozen response is unaffected by later mutations.
     assert response.content == "hi"
     assert response.tool_calls == []

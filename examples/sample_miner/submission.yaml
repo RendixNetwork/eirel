@@ -3,8 +3,8 @@ agent:
   version: 1.0.0
 family_id: general_chat
 inference:
-  model: gpt-4.1-mini
+  model: moonshotai/Kimi-K2.6-TEE
   providers:
-    - openai
+    - chutes
   fallback_order:
-    - openai
+    - chutes
