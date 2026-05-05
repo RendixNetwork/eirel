@@ -138,6 +138,7 @@ async def test_in_memory_aput_enforces_blob_cap():
 
 
 async def test_sqlite_checkpointer_roundtrip(tmp_path):
+    pytest.importorskip("aiosqlite", reason="requires eirel[sqlite] extra")
     from eirel.checkpoint.sqlite import SqliteCheckpointer
 
     cp = SqliteCheckpointer(tmp_path / "ckpt.sqlite")
@@ -166,6 +167,7 @@ async def test_sqlite_checkpointer_roundtrip(tmp_path):
 
 
 async def test_sqlite_persists_across_instances(tmp_path):
+    pytest.importorskip("aiosqlite", reason="requires eirel[sqlite] extra")
     from eirel.checkpoint.sqlite import SqliteCheckpointer
 
     db_path = tmp_path / "ckpt.sqlite"
