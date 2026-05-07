@@ -32,6 +32,7 @@ from eirel.families.general_chat.tools import (
     GeneralChatToolCatalog,
     RetryPolicy,
 )
+from eirel.families.general_chat.tools.rag import RagTool
 from eirel.families.general_chat.tools.sandbox import SandboxSession, SandboxTool
 from eirel.families.general_chat.tools.url_fetch import UrlFetchTool
 from eirel.families.general_chat.tools.web_search import WebSearchTool
@@ -52,6 +53,7 @@ __all__ = [
     "INSTANT_BUDGET",
     "INSTANT_WEB_SEARCH_BUDGET",
     "ModeBudget",
+    "RagTool",
     "RunBudget",
     "RunBudgetExhaustedError",
     "RunCostTracker",

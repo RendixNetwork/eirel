@@ -5,6 +5,28 @@ All notable changes to the Eirel SDK are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-05-07
+
+### Added
+
+- **`RagTool`** (`eirel.RagTool`, `eirel.families.general_chat.tools.rag`):
+  miner-facing client for the subnet's `rag-tool-service`. Calls
+  `POST /v1/rag/retrieve` with `{corpus_id, query, k}` and returns
+  ranked chunks. Tool name (`rag.retrieve`) matches the validator's
+  `tool_attestation` ledger key, so `rag_required` eval tasks score
+  the call as routed when miners use this tool.
+- Examples directory `examples/graph_general_chat/` showing the
+  end-to-end graph agent shape including how to read
+  `metadata.rag_corpus_id` from the request envelope.
+
+### Operator notes
+
+- Miner pods need `EIREL_RAG_URL` (injected by `runtime_manager` from
+  the orchestrator's `EIREL_RAG_TOOL_URL`) for the tool to work.
+- `rag_required` pool kind is published from `eirel-eval-pool`;
+  bundles carry `corpora` aggregated at render-time. Owner-side
+  `corpus_indexer` indexes them once per run on cache miss.
+
 ## [0.4.0] - 2026-05-05
 
 This is a substantial release that re-bases the SDK around a graph

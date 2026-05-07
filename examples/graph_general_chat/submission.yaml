@@ -1,0 +1,14 @@
+agent:
+  name: graph-general-chat-agent
+  version: 0.1.0
+family_id: general_chat
+inference:
+  model: zai-org/GLM-5.1-TEE
+  providers:
+    - chutes
+  fallback_order:
+    - chutes
+  requires_subnet_provider_proxy: true
+  provider_mode: proxy
+runtime:
+  kind: graph
