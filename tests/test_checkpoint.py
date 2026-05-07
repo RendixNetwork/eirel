@@ -213,7 +213,9 @@ def test_encode_decode_thread_token_roundtrip():
 def test_decode_rejects_tampered_token():
     secret = "test-secret"
     token = encode_thread_token(thread_id="t1", checkpoint_id="abc", secret=secret)
-    tampered = token[:-2] + "00"
+    # Flip the last hex char to a guaranteed-different value (avoid the 1/256
+    # case where the original HMAC already ends in the replacement char).
+    tampered = token[:-1] + ("1" if token[-1] == "0" else "0")
     with pytest.raises(InvalidResumeToken):
         decode_thread_token(tampered, secret)
 
