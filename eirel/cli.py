@@ -202,30 +202,71 @@ def _run_submit(args: argparse.Namespace) -> None:
 # status
 # ---------------------------------------------------------------------------
 
+_BUILD_VERDICTS = {
+    "built": "✓ built — agent compiled, booted, and passed the handshake",
+    "build_failed": "✗ build failed",
+    "verifying": "… verifying — build + boot in progress",
+    "pending": "… pending — build not started yet",
+}
+
+
+def _print_submission_summary(submission: dict, *, index: int, is_current: bool) -> None:
+    sub_id = submission.get("id") or submission.get("submission_id") or "?"
+    seq = submission.get("submission_seq")
+    family = submission.get("family_id", "?")
+    marker = "  (current)" if is_current else ""
+    header = f"[{index}] submission {sub_id}"
+    if seq is not None:
+        header += f"  seq={seq}"
+    header += f"  family={family}{marker}"
+    print(header)
+
+    build_status = submission.get("build_status") or "pending"
+    verdict = _BUILD_VERDICTS.get(build_status, build_status)
+    checked = submission.get("build_checked_at")
+    suffix = f"   (checked {checked})" if checked else ""
+    print(f"    BUILD: {verdict}{suffix}")
+    # build_error is set on failures and also when a verify deferred at
+    # peak (build_status stays "pending" with a "deferred: ..." reason),
+    # so show it whenever it's present.
+    error = submission.get("build_error")
+    if error:
+        print(f"      reason: {error}")
+
+    print(f"    submission status: {submission.get('status')}")
+    summary = submission.get("latest_scorecard_summary")
+    if isinstance(summary, dict) and summary.get("overall_score") is not None:
+        print(f"    latest score: {summary.get('overall_score')}")
+
+
 async def _status(args: argparse.Namespace) -> None:
     signer = _load_signer(args)
     base_url = args.owner_api_url.rstrip("/")
 
     async with httpx.AsyncClient(base_url=base_url, timeout=args.timeout) as client:
-        headers = signer.signed_headers("GET", "/v1/submissions/current", b"")
-        response = await client.get("/v1/submissions/current", headers=headers)
+        headers = signer.signed_headers("GET", "/v1/submissions/mine", b"")
+        response = await client.get("/v1/submissions/mine", headers=headers)
         response.raise_for_status()
-        submission = response.json()
+        submissions = response.json()
 
-        if submission is None:
-            print("No active submission found.")
+        if not submissions:
+            print("No submissions found for this hotkey.")
             return
 
-        print("=== Current Submission ===")
-        print(json.dumps(submission, indent=2))
+        print(f"=== Your Submissions ({len(submissions)}) ===\n")
+        for index, submission in enumerate(submissions, start=1):
+            _print_submission_summary(submission, index=index, is_current=index == 1)
+            print()
 
-        submission_id = None
-        if isinstance(submission, dict):
-            submission_id = submission.get("id") or submission.get("submission_id")
+        # Newest submission first (server orders by submission_seq desc).
+        submission = submissions[0]
+        submission_id = submission.get("id") or submission.get("submission_id")
 
         if submission_id:
             try:
-                progress_response = await client.get(f"/v1/submissions/{submission_id}/progress")
+                progress_path = f"/v1/submissions/{submission_id}/progress"
+                progress_headers = signer.signed_headers("GET", progress_path, b"")
+                progress_response = await client.get(progress_path, headers=progress_headers)
             except httpx.HTTPError as exc:
                 print(f"\nProgress: request failed ({exc})")
             else:
