@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "eirel"
-version = "0.5.0"
+version = "0.5.1"
 description = "Public miner SDK, agent runner, and registration tooling for the EIREL subnet."
 readme = "README.md"
 requires-python = ">=3.12"
