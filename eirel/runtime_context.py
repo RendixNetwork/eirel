@@ -30,10 +30,24 @@ from typing import Any
 # impossible.
 _JOB_ID: ContextVar[str | None] = ContextVar("eirel_job_id", default=None)
 
+# Per-request tool credential stamped by owner-api alongside the job_id.
+# Bound (HMAC) to this request's job tag, so it authorizes tool calls only
+# under this job — the miner never holds the signing key.
+_JOB_TOKEN: ContextVar[str | None] = ContextVar("eirel_job_token", default=None)
+
 
 def get_active_job_id() -> str | None:
     """Return the per-request job_id stamped by owner-api, if any."""
     return _JOB_ID.get()
+
+
+def get_active_job_token() -> str | None:
+    """Return the per-request tool token stamped by owner-api, if any.
+
+    Tool clients send this as their bearer so calls are scoped to the
+    current job; falls back to a statically configured token when absent
+    (local/standalone runs outside the owner-api proxy)."""
+    return _JOB_TOKEN.get()
 
 
 def _set_active_job_id(value: str | None) -> object:
@@ -45,6 +59,14 @@ def _set_active_job_id(value: str | None) -> object:
 
 def _reset_active_job_id(token: Any) -> None:
     _JOB_ID.reset(token)
+
+
+def _set_active_job_token(value: str | None) -> object:
+    return _JOB_TOKEN.set(value)
+
+
+def _reset_active_job_token(token: Any) -> None:
+    _JOB_TOKEN.reset(token)
 
 
 class JobIdContextMiddleware:
@@ -63,6 +85,7 @@ class JobIdContextMiddleware:
             await self.app(scope, receive, send)
             return
         job_id: str | None = None
+        job_token: str | None = None
         for raw_name, raw_value in scope.get("headers", []):
             try:
                 name = raw_name.decode("latin-1").lower()
@@ -73,15 +96,22 @@ class JobIdContextMiddleware:
                     job_id = raw_value.decode("latin-1") or None
                 except (UnicodeDecodeError, AttributeError):
                     job_id = None
-                break
-        token = _set_active_job_id(job_id)
+            elif name == "x-eirel-job-token":
+                try:
+                    job_token = raw_value.decode("latin-1") or None
+                except (UnicodeDecodeError, AttributeError):
+                    job_token = None
+        id_token = _set_active_job_id(job_id)
+        tok_token = _set_active_job_token(job_token)
         try:
             await self.app(scope, receive, send)
         finally:
-            _reset_active_job_id(token)
+            _reset_active_job_id(id_token)
+            _reset_active_job_token(tok_token)
 
 
 __all__ = [
     "JobIdContextMiddleware",
     "get_active_job_id",
+    "get_active_job_token",
 ]

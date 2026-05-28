@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 
 from eirel.families.general_chat._retry import retry_with_jitter
+from eirel.runtime_context import get_active_job_id, get_active_job_token
 
 
 class ToolServiceError(RuntimeError):
@@ -57,10 +58,16 @@ class ToolServiceClient:
                 "tool service base URL is not configured",
             )
         headers: dict[str, str] = {"Content-Type": "application/json"}
-        if self.config.api_token:
-            headers["Authorization"] = f"Bearer {self.config.api_token}"
-        if self.config.job_id:
-            headers["X-Eirel-Job-Id"] = self.config.job_id
+        # Prefer the per-request token owner-api stamped for THIS job — it is
+        # bound to the job tag, so it authorizes tool calls only under this
+        # miner's own job. Fall back to a statically configured token for
+        # local/standalone runs outside the owner-api proxy.
+        bearer = get_active_job_token() or self.config.api_token
+        if bearer:
+            headers["Authorization"] = f"Bearer {bearer}"
+        job_id = self.config.job_id or get_active_job_id()
+        if job_id:
+            headers["X-Eirel-Job-Id"] = job_id
         headers["X-Eirel-Max-Requests"] = str(self.config.max_requests)
         client = self._get_client()
 
